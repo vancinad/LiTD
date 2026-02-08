@@ -1,0 +1,2 @@
+# LiTD
+Lichess Tournament Director
