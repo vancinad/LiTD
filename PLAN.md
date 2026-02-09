@@ -4,7 +4,7 @@
 
 ### Milestone 0 – Scaffold
 - sbt project
-- Akka HTTP server with health endpoint
+- Apache HTTP server
 - MongoDB client wiring (official Scala driver)
 - Config loading
 - Local dev Docker compose for MongoDB replica set (to support transactions)
