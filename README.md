@@ -5,6 +5,26 @@ Lichess Tournament Director
 
 **Goal:** Create a system for automatically managing long-running Swiss tournaments on Lichess.org. 
 
+## Development
+
+### Start MongoDB replica set
+
+```bash
+docker compose up -d
+```
+
+### Run the service
+
+```bash
+sbt run
+```
+
+The health endpoint should respond with `ok`:
+
+```bash
+curl http://localhost:8080/health
+```
+
 References:
 * [Lichess Feedback - Clocks start automatically in Swiss Tournament?!](https://lichess.org/forum/redirect/post/L9boi7eP)
 * [Lichess Feedback - starting timer should be removed#3](https://lichess.org/forum/redirect/post/AvLmQzeD)
