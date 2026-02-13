@@ -4,12 +4,13 @@ import akka.actor.typed.ActorSystem
 import akka.actor.typed.scaladsl.Behaviors
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.model.StatusCodes
-import akka.http.scaladsl.server.Directives.*
+import akka.http.scaladsl.server.Directives._
 import com.typesafe.config.{Config, ConfigFactory}
 import org.mongodb.scala.MongoClient
 
 import scala.concurrent.ExecutionContext
 import scala.util.{Failure, Success}
+import io.circe.syntax.EncoderOps
 
 final case class HttpConfig(host: String, port: Int)
 final case class MongoConfig(uri: String, database: String)
@@ -36,14 +37,15 @@ object MongoClientFactory {
   def create(mongoConfig: MongoConfig): MongoClient = MongoClient(mongoConfig.uri)
 }
 
-object Main {
+object MainObject {
   def main(args: Array[String]): Unit = {
     implicit val system: ActorSystem[Nothing] = ActorSystem(Behaviors.empty, "litd")
     implicit val ec: ExecutionContext = system.executionContext
 
     val appConfig = AppConfigLoader.load()
     val mongoClient = MongoClientFactory.create(appConfig.mongodb)
-
+    system.log.info("mongoClient status: "+mongoClient.getClusterDescription)
+    
     // GET /health -> "ok"
     val routes = path("health") {
       get {
@@ -62,5 +64,6 @@ object Main {
           mongoClient.close()
           system.terminate()
       }
+
   }
 }
