@@ -19,6 +19,7 @@ import litd.auth.{
 import litd.mongo.MongoDatabaseFactory
 import litd.mongo.migration.MigrationRunner
 import litd.mongo.repository.Repositories
+import litd.tournament.{TournamentRoutes, TournamentService}
 import org.mongodb.scala.MongoClient
 
 import scala.io.StdIn
@@ -100,6 +101,12 @@ object MainObject {
       teamMembershipCacheRepository = repositories.teamMembershipCache
     )
     val authRoutes = new AuthRoutes(appConfig.auth, authService)
+    val tournamentService = new TournamentService(
+      tournamentRepository = repositories.tournaments,
+      registrationRepository = repositories.registrations,
+      roundRepository = repositories.rounds
+    )
+    val tournamentRoutes = new TournamentRoutes(appConfig.auth, authService, tournamentService)
 
     /** API endpoint: GET /health returns plain "ok" for basic liveness checks. */
     val healthRoute = path("health") {
@@ -107,7 +114,7 @@ object MainObject {
         complete(StatusCodes.OK -> "ok")
       }
     }
-    val routes = healthRoute ~ authRoutes.routes
+    val routes = healthRoute ~ authRoutes.routes ~ tournamentRoutes.routes
 
     val binding = Await.result(
       Http()

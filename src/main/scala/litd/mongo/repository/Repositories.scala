@@ -4,17 +4,49 @@ import litd.domain._
 import org.mongodb.scala.MongoDatabase
 import org.mongodb.scala.model.Filters.{and, equal}
 import org.mongodb.scala.model.ReplaceOptions
+import org.mongodb.scala.model.Sorts
 
 import scala.concurrent.{ExecutionContext, Future}
 
 final class TournamentRepository(database: MongoDatabase)
-    extends MongoRepository[TournamentDocument](database, "tournaments")
+    extends MongoRepository[TournamentDocument](database, "tournaments") {
+  def findByIdOption(id: org.bson.types.ObjectId)(implicit ec: ExecutionContext): Future[Option[TournamentDocument]] =
+    collection.find(equal("_id", id)).first().toFutureOption()
+}
 
 final class RegistrationRepository(database: MongoDatabase)
-    extends MongoRepository[RegistrationDocument](database, "registrations")
+    extends MongoRepository[RegistrationDocument](database, "registrations") {
+  def findByTournamentAndUser(tournamentId: org.bson.types.ObjectId, lichessUserId: String)(implicit
+      ec: ExecutionContext
+  ): Future[Option[RegistrationDocument]] =
+    collection
+      .find(and(equal("tournamentId", tournamentId), equal("lichessUserId", lichessUserId)))
+      .first()
+      .toFutureOption()
+
+  def replaceByTournamentAndUser(document: RegistrationDocument)(implicit ec: ExecutionContext): Future[Boolean] =
+    collection
+      .replaceOne(
+        and(equal("tournamentId", document.tournamentId), equal("lichessUserId", document.lichessUserId)),
+        document,
+        ReplaceOptions().upsert(false)
+      )
+      .toFuture()
+      .map(_.getMatchedCount > 0)
+}
 
 final class RoundRepository(database: MongoDatabase)
-    extends MongoRepository[RoundDocument](database, "rounds")
+    extends MongoRepository[RoundDocument](database, "rounds") {
+  def latestRoundNumberForTournament(tournamentId: org.bson.types.ObjectId)(implicit
+      ec: ExecutionContext
+  ): Future[Option[Int]] =
+    collection
+      .find(equal("tournamentId", tournamentId))
+      .sort(Sorts.descending("roundNumber"))
+      .first()
+      .toFutureOption()
+      .map(_.map(_.roundNumber))
+}
 
 final class PairingRepository(database: MongoDatabase)
     extends MongoRepository[PairingDocument](database, "pairings")
