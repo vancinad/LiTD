@@ -36,3 +36,7 @@ curl http://localhost:8080/health
 References:
 * [Lichess Feedback - Clocks start automatically in Swiss Tournament?!](https://lichess.org/forum/redirect/post/L9boi7eP)
 * [Lichess Feedback - starting timer should be removed#3](https://lichess.org/forum/redirect/post/AvLmQzeD)
+
+## UI Design
+
+See [UI_DESIGN.md](UI_DESIGN.md) for the proposed first-pass user interface architecture and screen flows.
