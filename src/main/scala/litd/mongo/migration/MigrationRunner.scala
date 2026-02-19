@@ -55,7 +55,8 @@ object MigrationRunner {
       database,
       Seq(
         InitialCollectionsAndIndexesMigration,
-        OAuthAndTeamGateMigration
+        OAuthAndTeamGateMigration,
+        ChallengeIssuanceMigration
       )
     )
 }

@@ -30,6 +30,7 @@ final class TournamentRoutes(
   private implicit val pairingViewEncoder: Encoder[PairingView] = deriveEncoder[PairingView]
   private implicit val byeViewEncoder: Encoder[ByeView] = deriveEncoder[ByeView]
   private implicit val generateRoundViewEncoder: Encoder[GenerateRoundView] = deriveEncoder[GenerateRoundView]
+  private implicit val issueChallengeViewEncoder: Encoder[IssueChallengeView] = deriveEncoder[IssueChallengeView]
 
   private def withAuthenticatedUser(inner: AuthenticatedUser => Route): Route =
     optionalCookie(authConfig.session.cookieName) {
@@ -46,6 +47,10 @@ final class TournamentRoutes(
   private def parseTournamentId(id: String): Either[TournamentError, ObjectId] =
     if (ObjectId.isValid(id)) Right(new ObjectId(id))
     else Left(TournamentError.BadRequest(s"Invalid tournament id '$id'"))
+
+  private def parsePairingId(id: String): Either[TournamentError, ObjectId] =
+    if (ObjectId.isValid(id)) Right(new ObjectId(id))
+    else Left(TournamentError.BadRequest(s"Invalid pairing id '$id'"))
 
   private def completeDomainError(error: TournamentError): Route =
     complete(error.status -> Map("error" -> error.message).asJson.noSpaces)
@@ -175,11 +180,31 @@ final class TournamentRoutes(
       }
     }
 
+  /** API endpoint: POST /tournaments/{tournamentId}/pairings/{pairingId}/challenge issues a Lichess challenge and stores challengeId on the pairing. */
+  private val issueChallengeRoute: Route =
+    path("tournaments" / Segment / "pairings" / Segment / "challenge") { (tournamentIdRaw, pairingIdRaw) =>
+      post {
+        withAuthenticatedUser { user =>
+          (parseTournamentId(tournamentIdRaw), parsePairingId(pairingIdRaw)) match {
+            case (Left(error), _)            => completeDomainError(error)
+            case (_, Left(error))            => completeDomainError(error)
+            case (Right(tournamentId), Right(pairingId)) =>
+              onComplete(tournamentService.issueChallenge(tournamentId, pairingId, user)) {
+                case Success(Right(result)) => complete(StatusCodes.Created -> result.asJson.noSpaces)
+                case Success(Left(error))   => completeDomainError(error)
+                case Failure(ex)            => complete(StatusCodes.BadGateway -> Map("error" -> ex.getMessage).asJson.noSpaces)
+              }
+          }
+        }
+      }
+    }
+
   val routes: Route =
     createTournamentRoute ~
       registerRoute ~
       withdrawRoute ~
       reactivateRoute ~
       generateRoundRoute ~
-      grantTdByeRoute
+      grantTdByeRoute ~
+      issueChallengeRoute
 }

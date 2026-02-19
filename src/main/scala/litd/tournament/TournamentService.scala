@@ -10,6 +10,7 @@ import litd.domain.{
   RegistrationDocument,
   TournamentDocument
 }
+import litd.auth.AuthenticatedUser
 import litd.mongo.repository.{
   AuditEventRepository,
   ByeRepository,
@@ -19,7 +20,7 @@ import litd.mongo.repository.{
   RoundRepository,
   TournamentRepository
 }
-import litd.tournament.TournamentError.{BadRequest, Conflict, NotFound}
+import litd.tournament.TournamentError.{BadRequest, Conflict, External, NotFound}
 import org.bson.Document
 import org.bson.types.ObjectId
 import org.mongodb.scala._
@@ -37,7 +38,8 @@ final class TournamentService(
     byeRepository: ByeRepository,
     playerTournamentStateRepository: PlayerTournamentStateRepository,
     auditEventRepository: AuditEventRepository,
-    mongoClient: MongoClient
+    mongoClient: MongoClient,
+    challengeGateway: ChallengeGateway = ChallengeGateway.Disabled
 )(implicit ec: ExecutionContext) {
 
   /** Creates a tournament with spec-capped configured rounds and draft status. */
@@ -137,6 +139,31 @@ final class TournamentService(
       }
     }
   }
+
+  /** API command: issue an external Lichess challenge for a pairing and persist challengeId on the pairing. */
+  def issueChallenge(
+      tournamentId: ObjectId,
+      pairingId: ObjectId,
+      user: AuthenticatedUser
+  ): Future[Either[TournamentError, IssueChallengeView]] =
+    for {
+      pairingOpt <- pairingRepository.findByTournamentAndId(tournamentId, pairingId)
+      result <- pairingOpt match {
+        case None => Future.successful(Left(NotFound(s"Pairing '${pairingId.toHexString}' not found in tournament")))
+        case Some(pairing) if pairing.whiteLichessUserId != user.lichessUserId =>
+          Future.successful(Left(Conflict("Only the white player can issue the challenge for this pairing")))
+        case Some(pairing) if pairing.gameId.nonEmpty =>
+          Future.successful(Left(Conflict("Pairing already has an associated gameId")))
+        case Some(pairing) if pairing.challengeId.nonEmpty =>
+          Future.successful(Left(Conflict("Challenge already issued for this pairing")))
+        case Some(pairing) =>
+          challengeGateway.issueChallenge(pairing.blackLichessUserId, user.accessToken).flatMap {
+            case Left(errorMessage) => Future.successful(Left(External(s"Challenge issuance failed: $errorMessage")))
+            case Right(issued) =>
+              persistIssuedChallenge(tournamentId, pairing, issued)
+          }
+      }
+    } yield result
 
   private def generateRoundInTransaction(
       session: ClientSession,
@@ -429,6 +456,59 @@ final class TournamentService(
           } yield domainResult
       }
     } yield result
+
+  private def persistIssuedChallenge(
+      tournamentId: ObjectId,
+      pairing: PairingDocument,
+      issuedChallenge: IssuedChallenge
+  ): Future[Either[TournamentError, IssueChallengeView]] =
+    inTransactionEither { session =>
+      val now = new Date()
+      val pairingId = pairing._id.get
+      val payload = new Document()
+        .append("pairingId", pairingId.toHexString)
+        .append("roundNumber", pairing.roundNumber)
+        .append("challengeId", issuedChallenge.challengeId)
+        .append("whiteLichessUserId", pairing.whiteLichessUserId)
+        .append("blackLichessUserId", pairing.blackLichessUserId)
+
+      pairingRepository
+        .setChallengeIssued(
+          session = session,
+          pairingId = pairingId,
+          challengeId = issuedChallenge.challengeId,
+          challengeIssuedAt = now
+        )
+        .flatMap {
+          case false =>
+            Future.successful(Left(Conflict("Challenge was already issued by another request")))
+          case true =>
+            auditEventRepository
+              .insert(
+                session,
+                AuditEventDocument(
+                  _id = Some(new ObjectId()),
+                  tournamentId = tournamentId,
+                  `type` = "challenge_issued",
+                  payload = payload,
+                  createdAt = now
+                )
+              )
+              .map(_ =>
+                Right(
+                  IssueChallengeView(
+                    tournamentId = tournamentId.toHexString,
+                    pairingId = pairingId.toHexString,
+                    roundNumber = pairing.roundNumber,
+                    whiteLichessUserId = pairing.whiteLichessUserId,
+                    blackLichessUserId = pairing.blackLichessUserId,
+                    challengeId = issuedChallenge.challengeId,
+                    status = issuedChallenge.status
+                  )
+                )
+              )
+        }
+    }
 
   private def upsertForRegistration(
       tournamentId: ObjectId,

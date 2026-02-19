@@ -36,6 +36,11 @@ final case class OAuthTokenResponse(
     expiresInSeconds: Option[Int]
 )
 
+final case class LichessChallengeResponse(
+    challengeId: String,
+    status: String
+)
+
 final case class AuthenticatedUser(
     lichessUserId: String,
     accessToken: String

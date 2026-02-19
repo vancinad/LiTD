@@ -19,7 +19,7 @@ import litd.auth.{
 import litd.mongo.MongoDatabaseFactory
 import litd.mongo.migration.MigrationRunner
 import litd.mongo.repository.Repositories
-import litd.tournament.{TournamentRoutes, TournamentService}
+import litd.tournament.{ChallengeSyncWorker, LichessChallengeGateway, TournamentRoutes, TournamentService}
 import org.mongodb.scala.MongoClient
 
 import scala.io.StdIn
@@ -29,13 +29,19 @@ import scala.util.control.NonFatal
 
 final case class HttpConfig(host: String, port: Int)
 final case class MongoConfig(uri: String, database: String)
-final case class AppConfig(http: HttpConfig, mongodb: MongoConfig, auth: AuthConfig)
+final case class AppConfig(
+    http: HttpConfig,
+    mongodb: MongoConfig,
+    auth: AuthConfig,
+    challengeWorker: litd.tournament.ChallengeWorkerConfig
+)
 
 object AppConfigLoader {
   def load(config: Config = ConfigFactory.load()): AppConfig = {
     val httpConfig = config.getConfig("litd.http")
     val mongoConfig = config.getConfig("litd.mongodb")
     val authConfig = config.getConfig("litd.auth")
+    val challengeWorkerConfig = config.getConfig("litd.challengeWorker")
     val lichessConfig = authConfig.getConfig("lichess")
     val sessionConfig = authConfig.getConfig("session")
     AppConfig(
@@ -66,6 +72,11 @@ object AppConfigLoader {
           secureCookie = sessionConfig.getBoolean("secureCookie"),
           maxAgeSeconds = sessionConfig.getInt("maxAgeSeconds")
         )
+      ),
+      challengeWorker = litd.tournament.ChallengeWorkerConfig(
+        enabled = challengeWorkerConfig.getBoolean("enabled"),
+        pollIntervalSeconds = challengeWorkerConfig.getInt("pollIntervalSeconds"),
+        batchSize = challengeWorkerConfig.getInt("batchSize")
       )
     )
   }
@@ -101,6 +112,7 @@ object MainObject {
       teamMembershipCacheRepository = repositories.teamMembershipCache
     )
     val authRoutes = new AuthRoutes(appConfig.auth, authService)
+    val challengeGateway = new LichessChallengeGateway(lichessApiClient)
     val tournamentService = new TournamentService(
       tournamentRepository = repositories.tournaments,
       registrationRepository = repositories.registrations,
@@ -109,8 +121,18 @@ object MainObject {
       byeRepository = repositories.byes,
       playerTournamentStateRepository = repositories.playerTournamentState,
       auditEventRepository = repositories.auditEvents,
-      mongoClient = mongoClient
+      mongoClient = mongoClient,
+      challengeGateway = challengeGateway
     )
+    val challengeWorker = new ChallengeSyncWorker(
+      config = appConfig.challengeWorker,
+      pairingRepository = repositories.pairings,
+      oauthTokenRepository = repositories.oauthTokens,
+      auditEventRepository = repositories.auditEvents,
+      cryptoService = cryptoService,
+      challengeGateway = challengeGateway
+    )
+    val challengeWorkerCancellable = challengeWorker.start()
     val tournamentRoutes = new TournamentRoutes(appConfig.auth, authService, tournamentService)
 
     /** API endpoint: GET /health returns plain "ok" for basic liveness checks. */
@@ -135,6 +157,7 @@ object MainObject {
       case NonFatal(ex) =>
         system.log.error("Read from stdin failed", ex)
     } finally {
+      challengeWorkerCancellable.foreach(_.cancel())
       Await.result(binding.unbind(), 15.seconds)
       mongoClient.close()
       system.terminate()

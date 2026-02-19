@@ -3,6 +3,7 @@ package litd.mongo.repository
 import litd.domain._
 import org.mongodb.scala.MongoDatabase
 import org.mongodb.scala.model.Filters.{and, equal}
+import org.mongodb.scala.model.Updates.set
 import org.mongodb.scala.model.ReplaceOptions
 import org.mongodb.scala.model.Sorts
 import org.mongodb.scala.ClientSession
@@ -144,6 +145,14 @@ final class PairingRepository(database: MongoDatabase)
     if (documents.isEmpty) Future.unit
     else collection.insertMany(session, documents).toFuture().map(_ => ())
 
+  def findByTournamentAndId(tournamentId: org.bson.types.ObjectId, pairingId: org.bson.types.ObjectId)(implicit
+      ec: ExecutionContext
+  ): Future[Option[PairingDocument]] =
+    collection
+      .find(and(equal("_id", pairingId), equal("tournamentId", tournamentId)))
+      .first()
+      .toFutureOption()
+
   def findByRoundAndUser(
       session: ClientSession,
       roundId: org.bson.types.ObjectId,
@@ -159,6 +168,58 @@ final class PairingRepository(database: MongoDatabase)
       )
       .first()
       .toFutureOption()
+
+  def setChallengeIssued(
+      session: ClientSession,
+      pairingId: org.bson.types.ObjectId,
+      challengeId: String,
+      challengeIssuedAt: java.util.Date
+  )(implicit ec: ExecutionContext): Future[Boolean] =
+    collection
+      .updateOne(
+        session,
+        and(
+          equal("_id", pairingId),
+          equal("gameId", ""),
+          org.mongodb.scala.model.Filters.exists("challengeId", exists = false)
+        ),
+        org.mongodb.scala.model.Updates.combine(
+          set("challengeId", challengeId),
+          set("challengeIssuedAt", challengeIssuedAt)
+        )
+      )
+      .toFuture()
+      .map(_.getModifiedCount > 0)
+
+  def listPendingChallengeGames(limit: Int)(implicit ec: ExecutionContext): Future[Seq[PairingDocument]] =
+    collection
+      .find(
+        and(
+          equal("gameId", ""),
+          org.mongodb.scala.model.Filters.exists("challengeId", exists = true)
+        )
+      )
+      .limit(limit)
+      .toFuture()
+
+  def setGameStarted(
+      pairingId: org.bson.types.ObjectId,
+      gameId: String,
+      gameStartedAt: java.util.Date
+  )(implicit ec: ExecutionContext): Future[Boolean] =
+    collection
+      .updateOne(
+        and(
+          equal("_id", pairingId),
+          equal("gameId", "")
+        ),
+        org.mongodb.scala.model.Updates.combine(
+          set("gameId", gameId),
+          set("gameStartedAt", gameStartedAt)
+        )
+      )
+      .toFuture()
+      .map(_.getModifiedCount > 0)
 }
 
 final class ByeRepository(database: MongoDatabase)

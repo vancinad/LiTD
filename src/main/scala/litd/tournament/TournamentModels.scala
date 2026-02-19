@@ -57,6 +57,16 @@ final case class GenerateRoundView(
     auditEventType: String
 )
 
+final case class IssueChallengeView(
+    tournamentId: String,
+    pairingId: String,
+    roundNumber: Int,
+    whiteLichessUserId: String,
+    blackLichessUserId: String,
+    challengeId: String,
+    status: String
+)
+
 sealed trait TournamentError extends Product with Serializable {
   def status: akka.http.scaladsl.model.StatusCode
   def message: String
@@ -73,6 +83,10 @@ object TournamentError {
 
   final case class Conflict(message: String) extends TournamentError {
     override val status: akka.http.scaladsl.model.StatusCode = StatusCodes.Conflict
+  }
+
+  final case class External(message: String) extends TournamentError {
+    override val status: akka.http.scaladsl.model.StatusCode = StatusCodes.BadGateway
   }
 }
 
