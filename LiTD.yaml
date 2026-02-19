@@ -1,0 +1,1139 @@
+openapi: 3.0.3
+info:
+  title: LiTD API
+  version: 1.0.0
+  description: OpenAPI specification for all LiTD HTTP endpoints.
+servers:
+  - url: http://localhost:8080
+tags:
+  - name: Health
+  - name: Auth
+  - name: Tournament
+  - name: Public
+paths:
+  /health:
+    get:
+      tags: [Health]
+      summary: Liveness check
+      operationId: getHealth
+      responses:
+        '200':
+          description: Server is healthy
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: ok
+
+  /auth/lichess/start:
+    get:
+      tags: [Auth]
+      summary: Start Lichess OAuth flow
+      operationId: startLichessOAuth
+      responses:
+        '302':
+          description: Redirect to Lichess OAuth authorization page
+
+  /auth/lichess/callback:
+    get:
+      tags: [Auth]
+      summary: Complete Lichess OAuth flow
+      operationId: finishLichessOAuth
+      parameters:
+        - in: query
+          name: code
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: state
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Authenticated and session cookie set
+          headers:
+            Set-Cookie:
+              description: Contains `litd_session` session cookie
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthCallbackResponse'
+        '400':
+          description: Invalid OAuth state or request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: User is not in required Lichess team
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '502':
+          description: External OAuth/Lichess failure
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /auth/me:
+    get:
+      tags: [Auth]
+      summary: Get authenticated user
+      operationId: getAuthMe
+      security:
+        - CookieAuth: []
+      responses:
+        '200':
+          description: Authenticated user
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthMeResponse'
+        '401':
+          description: Missing or invalid session
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: User no longer meets team-gate requirements
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '502':
+          description: Upstream/auth service failure
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /tournaments:
+    post:
+      tags: [Tournament]
+      summary: Create tournament
+      operationId: createTournament
+      security:
+        - CookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateTournamentRequest'
+      responses:
+        '201':
+          description: Tournament created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TournamentView'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Missing or invalid session
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Team-gate forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Unexpected server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '502':
+          description: Upstream/auth service failure
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /tournaments/{tournamentId}/registrations:
+    post:
+      tags: [Tournament]
+      summary: Register authenticated player
+      operationId: registerPlayer
+      security:
+        - CookieAuth: []
+      parameters:
+        - $ref: '#/components/parameters/TournamentId'
+      responses:
+        '201':
+          description: Registration created or updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RegistrationView'
+        '400':
+          description: Invalid tournament ID
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Missing or invalid session
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Team-gate forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Tournament not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Unexpected server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '502':
+          description: Upstream/auth service failure
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /tournaments/{tournamentId}/registrations/withdraw:
+    post:
+      tags: [Tournament]
+      summary: Withdraw authenticated player
+      operationId: withdrawPlayer
+      security:
+        - CookieAuth: []
+      parameters:
+        - $ref: '#/components/parameters/TournamentId'
+      responses:
+        '200':
+          description: Registration status updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RegistrationView'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Missing or invalid session
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Team-gate forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Tournament or registration not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Invalid status transition
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Unexpected server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '502':
+          description: Upstream/auth service failure
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /tournaments/{tournamentId}/registrations/reactivate:
+    post:
+      tags: [Tournament]
+      summary: Reactivate authenticated player
+      operationId: reactivatePlayer
+      security:
+        - CookieAuth: []
+      parameters:
+        - $ref: '#/components/parameters/TournamentId'
+      responses:
+        '200':
+          description: Registration status updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RegistrationView'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Missing or invalid session
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Team-gate forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Tournament or registration not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Invalid status transition
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Unexpected server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '502':
+          description: Upstream/auth service failure
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /tournaments/{tournamentId}/rounds/generate:
+    post:
+      tags: [Tournament]
+      summary: Generate next Swiss round
+      operationId: generateRound
+      security:
+        - CookieAuth: []
+      parameters:
+        - $ref: '#/components/parameters/TournamentId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GenerateRoundRequest'
+      responses:
+        '201':
+          description: Round generated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GenerateRoundView'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Missing or invalid session
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Team-gate forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Tournament not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Round generation conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Unexpected server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '502':
+          description: Upstream/auth service failure
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /tournaments/{tournamentId}/rounds/{roundNumber}/byes/td:
+    post:
+      tags: [Tournament]
+      summary: Grant TD bye in an existing round
+      operationId: grantTdBye
+      security:
+        - CookieAuth: []
+      parameters:
+        - $ref: '#/components/parameters/TournamentId'
+        - $ref: '#/components/parameters/RoundNumber'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GrantTdByeRequest'
+      responses:
+        '201':
+          description: TD bye granted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ByeView'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Missing or invalid session
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Team-gate forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Tournament or round not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Player already paired/bye in this round
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Unexpected server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '502':
+          description: Upstream/auth service failure
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /tournaments/{tournamentId}/pairings/{pairingId}/challenge:
+    post:
+      tags: [Tournament]
+      summary: Issue Lichess challenge for pairing
+      operationId: issueChallenge
+      security:
+        - CookieAuth: []
+      parameters:
+        - $ref: '#/components/parameters/TournamentId'
+        - $ref: '#/components/parameters/PairingId'
+      responses:
+        '200':
+          description: Challenge already issued; existing challenge returned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IssueChallengeView'
+        '201':
+          description: Challenge issued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IssueChallengeView'
+        '400':
+          description: Invalid tournament or pairing ID
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Missing or invalid session
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Team-gate forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Pairing not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Challenge cannot be issued for current pairing state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '502':
+          description: Challenge provider/auth failure
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /tournaments/{tournamentId}/rounds/{roundNumber}/results/refresh:
+    post:
+      tags: [Tournament]
+      summary: Refresh round results from Lichess
+      operationId: refreshRoundResults
+      security:
+        - CookieAuth: []
+      parameters:
+        - $ref: '#/components/parameters/TournamentId'
+        - $ref: '#/components/parameters/RoundNumber'
+      responses:
+        '200':
+          description: Results refresh complete
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RefreshRoundResultsView'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Missing or invalid session
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Team-gate forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Tournament or round not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Round status conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '502':
+          description: Lichess/auth failure
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /tournaments/{tournamentId}/rounds/{roundNumber}/end:
+    post:
+      tags: [Tournament]
+      summary: End active round
+      operationId: endRound
+      security:
+        - CookieAuth: []
+      parameters:
+        - $ref: '#/components/parameters/TournamentId'
+        - $ref: '#/components/parameters/RoundNumber'
+      responses:
+        '200':
+          description: Round ended and results finalized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EndRoundView'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Missing or invalid session
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Team-gate forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Tournament or round not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Round state conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Unexpected server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '502':
+          description: Upstream/auth service failure
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /tournaments/{tournamentId}/pairings/{pairingId}/result/override:
+    post:
+      tags: [Tournament]
+      summary: Override pairing result
+      operationId: overridePairingResult
+      security:
+        - CookieAuth: []
+      parameters:
+        - $ref: '#/components/parameters/TournamentId'
+        - $ref: '#/components/parameters/PairingId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OverridePairingResultRequest'
+      responses:
+        '200':
+          description: Pairing result overridden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OverridePairingResultView'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Missing or invalid session
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Team-gate forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Tournament or pairing not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Pairing state conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Unexpected server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '502':
+          description: Upstream/auth service failure
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /public/tournaments/{tournamentId}/standings:
+    get:
+      tags: [Public]
+      summary: Get computed standings
+      operationId: getStandings
+      parameters:
+        - $ref: '#/components/parameters/TournamentId'
+      responses:
+        '200':
+          description: Standings read model
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StandingsView'
+        '400':
+          description: Invalid tournament ID
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Tournament not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Unexpected server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /public/tournaments/{tournamentId}/crosstable:
+    get:
+      tags: [Public]
+      summary: Get computed crosstable
+      operationId: getCrosstable
+      parameters:
+        - $ref: '#/components/parameters/TournamentId'
+      responses:
+        '200':
+          description: Crosstable read model
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CrosstableView'
+        '400':
+          description: Invalid tournament ID
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Tournament not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Unexpected server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  securitySchemes:
+    CookieAuth:
+      type: apiKey
+      in: cookie
+      name: litd_session
+
+  parameters:
+    TournamentId:
+      name: tournamentId
+      in: path
+      required: true
+      schema:
+        type: string
+      description: Mongo ObjectId hex string.
+    PairingId:
+      name: pairingId
+      in: path
+      required: true
+      schema:
+        type: string
+      description: Mongo ObjectId hex string.
+    RoundNumber:
+      name: roundNumber
+      in: path
+      required: true
+      schema:
+        type: integer
+        minimum: 1
+
+  schemas:
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+
+    AuthCallbackResponse:
+      type: object
+      required: [status, lichessUserId, sessionExpiresAt]
+      properties:
+        status:
+          type: string
+          example: authenticated
+        lichessUserId:
+          type: string
+        sessionExpiresAt:
+          type: string
+          description: ISO-8601 timestamp string or "unknown".
+
+    AuthMeResponse:
+      type: object
+      required: [lichessUserId]
+      properties:
+        lichessUserId:
+          type: string
+
+    CreateTournamentRequest:
+      type: object
+      required: [name, configuredMaxRounds]
+      properties:
+        name:
+          type: string
+        configuredMaxRounds:
+          type: integer
+          minimum: 1
+          maximum: 15
+
+    TournamentView:
+      type: object
+      required:
+        - id
+        - name
+        - status
+        - configuredMaxRounds
+        - effectiveMaxRounds
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        status:
+          type: string
+          enum: [draft, active, completed]
+        configuredMaxRounds:
+          type: integer
+        effectiveMaxRounds:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    RegistrationView:
+      type: object
+      required: [tournamentId, lichessUserId, status, effectiveRound, createdAt]
+      properties:
+        tournamentId:
+          type: string
+        lichessUserId:
+          type: string
+        status:
+          type: string
+          enum: [registered, withdrawn, disqualified]
+        effectiveRound:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+
+    GrantTdByeRequest:
+      type: object
+      required: [lichessUserId, scoreAwarded]
+      properties:
+        lichessUserId:
+          type: string
+        scoreAwarded:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 1
+
+    GenerateRoundRequest:
+      type: object
+      properties:
+        tdByes:
+          type: array
+          items:
+            $ref: '#/components/schemas/GrantTdByeRequest'
+          default: []
+
+    PairingView:
+      type: object
+      required: [whiteLichessUserId, blackLichessUserId]
+      properties:
+        whiteLichessUserId:
+          type: string
+        blackLichessUserId:
+          type: string
+
+    ByeView:
+      type: object
+      required: [lichessUserId, scoreAwarded, reason]
+      properties:
+        lichessUserId:
+          type: string
+        scoreAwarded:
+          type: number
+          format: double
+        reason:
+          type: string
+          enum: [odd, td_grant, withdrawal]
+
+    GenerateRoundView:
+      type: object
+      required:
+        - tournamentId
+        - roundId
+        - roundNumber
+        - effectiveMaxRounds
+        - pairings
+        - byes
+        - auditEventType
+      properties:
+        tournamentId:
+          type: string
+        roundId:
+          type: string
+        roundNumber:
+          type: integer
+        effectiveMaxRounds:
+          type: integer
+        pairings:
+          type: array
+          items:
+            $ref: '#/components/schemas/PairingView'
+        byes:
+          type: array
+          items:
+            $ref: '#/components/schemas/ByeView'
+        auditEventType:
+          type: string
+
+    IssueChallengeView:
+      type: object
+      required:
+        - tournamentId
+        - pairingId
+        - roundNumber
+        - whiteLichessUserId
+        - blackLichessUserId
+        - challengeId
+        - status
+      properties:
+        tournamentId:
+          type: string
+        pairingId:
+          type: string
+        roundNumber:
+          type: integer
+        whiteLichessUserId:
+          type: string
+        blackLichessUserId:
+          type: string
+        challengeId:
+          type: string
+        status:
+          type: string
+          description: Issuance status (e.g. created, already_issued).
+
+    RefreshRoundResultsView:
+      type: object
+      required: [tournamentId, roundNumber, refreshedPairings]
+      properties:
+        tournamentId:
+          type: string
+        roundNumber:
+          type: integer
+        refreshedPairings:
+          type: integer
+
+    EndRoundView:
+      type: object
+      required: [tournamentId, roundNumber, completedPairings, doubleForfeitCount, roundStatus]
+      properties:
+        tournamentId:
+          type: string
+        roundNumber:
+          type: integer
+        completedPairings:
+          type: integer
+        doubleForfeitCount:
+          type: integer
+        roundStatus:
+          type: string
+
+    OverridePairingResultRequest:
+      type: object
+      required: [result, reason]
+      properties:
+        result:
+          type: string
+          enum: [white, black, draw, forfeit]
+        reason:
+          type: string
+
+    OverridePairingResultView:
+      type: object
+      required: [tournamentId, pairingId, roundNumber, result, reason, appliedBy]
+      properties:
+        tournamentId:
+          type: string
+        pairingId:
+          type: string
+        roundNumber:
+          type: integer
+        result:
+          type: string
+          enum: [white, black, draw, forfeit]
+        reason:
+          type: string
+        appliedBy:
+          type: string
+
+    StandingsEntryView:
+      type: object
+      required: [rank, lichessUserId, points, gamesPlayed, buchholz, sonnebornBerger]
+      properties:
+        rank:
+          type: integer
+        lichessUserId:
+          type: string
+        points:
+          type: number
+          format: double
+        gamesPlayed:
+          type: integer
+        buchholz:
+          type: number
+          format: double
+        sonnebornBerger:
+          type: number
+          format: double
+
+    StandingsView:
+      type: object
+      required: [tournamentId, roundCount, entries]
+      properties:
+        tournamentId:
+          type: string
+        roundCount:
+          type: integer
+        entries:
+          type: array
+          items:
+            $ref: '#/components/schemas/StandingsEntryView'
+
+    CrosstableCellView:
+      type: object
+      required: [opponentLichessUserId, roundNumber, color, result, score]
+      properties:
+        opponentLichessUserId:
+          type: string
+        roundNumber:
+          type: integer
+        color:
+          type: string
+          enum: [white, black]
+        result:
+          type: string
+          enum: [white, black, draw, forfeit]
+        score:
+          type: number
+          format: double
+
+    CrosstableByeView:
+      type: object
+      required: [roundNumber, scoreAwarded, reason]
+      properties:
+        roundNumber:
+          type: integer
+        scoreAwarded:
+          type: number
+          format: double
+        reason:
+          type: string
+
+    CrosstableRowView:
+      type: object
+      required: [lichessUserId, points, gamesPlayed, games, byes]
+      properties:
+        lichessUserId:
+          type: string
+        points:
+          type: number
+          format: double
+        gamesPlayed:
+          type: integer
+        games:
+          type: array
+          items:
+            $ref: '#/components/schemas/CrosstableCellView'
+        byes:
+          type: array
+          items:
+            $ref: '#/components/schemas/CrosstableByeView'
+
+    CrosstableView:
+      type: object
+      required: [tournamentId, roundCount, rows]
+      properties:
+        tournamentId:
+          type: string
+        roundCount:
+          type: integer
+        rows:
+          type: array
+          items:
+            $ref: '#/components/schemas/CrosstableRowView'

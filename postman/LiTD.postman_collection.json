@@ -1,0 +1,309 @@
+{
+  "info": {
+    "name": "LiTD API",
+    "description": "Postman collection for LiTD endpoints from LiTD.yaml, organized by user role.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:8080" },
+    { "key": "tournamentId", "value": "" },
+    { "key": "roundNumber", "value": "1" },
+    { "key": "pairingId", "value": "" },
+    { "key": "code", "value": "" },
+    { "key": "state", "value": "" },
+    { "key": "litd_session", "value": "" },
+    { "key": "tdByeLichessUserId", "value": "" },
+    { "key": "configuredMaxRounds", "value": "7" },
+    { "key": "tournamentName", "value": "LiTD Test Tournament" }
+  ],
+  "item": [
+    {
+      "name": "Public Viewer",
+      "description": "Endpoints that do not require authentication.",
+      "item": [
+        {
+          "name": "Health - Liveness check",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/health",
+              "host": ["{{baseUrl}}"],
+              "path": ["health"]
+            },
+            "description": "GET /health"
+          }
+        },
+        {
+          "name": "Get Standings",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/public/tournaments/{{tournamentId}}/standings",
+              "host": ["{{baseUrl}}"],
+              "path": ["public", "tournaments", "{{tournamentId}}", "standings"]
+            },
+            "description": "GET /public/tournaments/{tournamentId}/standings"
+          }
+        },
+        {
+          "name": "Get Crosstable",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/public/tournaments/{{tournamentId}}/crosstable",
+              "host": ["{{baseUrl}}"],
+              "path": ["public", "tournaments", "{{tournamentId}}", "crosstable"]
+            },
+            "description": "GET /public/tournaments/{tournamentId}/crosstable"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Authenticated Player",
+      "description": "Endpoints exercised by a logged-in, team-gated player.",
+      "item": [
+        {
+          "name": "Start Lichess OAuth",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/auth/lichess/start",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "lichess", "start"]
+            },
+            "description": "GET /auth/lichess/start"
+          }
+        },
+        {
+          "name": "Complete Lichess OAuth Callback",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/auth/lichess/callback?code={{code}}&state={{state}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "lichess", "callback"],
+              "query": [
+                { "key": "code", "value": "{{code}}" },
+                { "key": "state", "value": "{{state}}" }
+              ]
+            },
+            "description": "GET /auth/lichess/callback"
+          }
+        },
+        {
+          "name": "Get Authenticated User",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Cookie", "value": "litd_session={{litd_session}}", "type": "text" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/me",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "me"]
+            },
+            "description": "GET /auth/me"
+          }
+        },
+        {
+          "name": "Register Authenticated Player",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Cookie", "value": "litd_session={{litd_session}}", "type": "text" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/tournaments/{{tournamentId}}/registrations",
+              "host": ["{{baseUrl}}"],
+              "path": ["tournaments", "{{tournamentId}}", "registrations"]
+            },
+            "description": "POST /tournaments/{tournamentId}/registrations"
+          }
+        },
+        {
+          "name": "Withdraw Authenticated Player",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Cookie", "value": "litd_session={{litd_session}}", "type": "text" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/tournaments/{{tournamentId}}/registrations/withdraw",
+              "host": ["{{baseUrl}}"],
+              "path": ["tournaments", "{{tournamentId}}", "registrations", "withdraw"]
+            },
+            "description": "POST /tournaments/{tournamentId}/registrations/withdraw"
+          }
+        },
+        {
+          "name": "Reactivate Authenticated Player",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Cookie", "value": "litd_session={{litd_session}}", "type": "text" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/tournaments/{{tournamentId}}/registrations/reactivate",
+              "host": ["{{baseUrl}}"],
+              "path": ["tournaments", "{{tournamentId}}", "registrations", "reactivate"]
+            },
+            "description": "POST /tournaments/{tournamentId}/registrations/reactivate"
+          }
+        },
+        {
+          "name": "Issue Lichess Challenge",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Cookie", "value": "litd_session={{litd_session}}", "type": "text" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/tournaments/{{tournamentId}}/pairings/{{pairingId}}/challenge",
+              "host": ["{{baseUrl}}"],
+              "path": ["tournaments", "{{tournamentId}}", "pairings", "{{pairingId}}", "challenge"]
+            },
+            "description": "POST /tournaments/{tournamentId}/pairings/{pairingId}/challenge"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Tournament Director",
+      "description": "Administrative tournament operations (currently auth-gated endpoints in LiTD).",
+      "item": [
+        {
+          "name": "Create Tournament",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "  const json = pm.response.json();",
+                  "  if (json && json.id) {",
+                  "    pm.collectionVariables.set('tournamentId', json.id);",
+                  "  }",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json", "type": "text" },
+              { "key": "Cookie", "value": "litd_session={{litd_session}}", "type": "text" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"{{tournamentName}}\",\n  \"configuredMaxRounds\": {{configuredMaxRounds}}\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/tournaments",
+              "host": ["{{baseUrl}}"],
+              "path": ["tournaments"]
+            },
+            "description": "POST /tournaments"
+          }
+        },
+        {
+          "name": "Generate Next Swiss Round",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json", "type": "text" },
+              { "key": "Cookie", "value": "litd_session={{litd_session}}", "type": "text" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"tdByes\": []\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/tournaments/{{tournamentId}}/rounds/generate",
+              "host": ["{{baseUrl}}"],
+              "path": ["tournaments", "{{tournamentId}}", "rounds", "generate"]
+            },
+            "description": "POST /tournaments/{tournamentId}/rounds/generate"
+          }
+        },
+        {
+          "name": "Grant TD Bye",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json", "type": "text" },
+              { "key": "Cookie", "value": "litd_session={{litd_session}}", "type": "text" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"lichessUserId\": \"{{tdByeLichessUserId}}\",\n  \"scoreAwarded\": 1.0\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/tournaments/{{tournamentId}}/rounds/{{roundNumber}}/byes/td",
+              "host": ["{{baseUrl}}"],
+              "path": ["tournaments", "{{tournamentId}}", "rounds", "{{roundNumber}}", "byes", "td"]
+            },
+            "description": "POST /tournaments/{tournamentId}/rounds/{roundNumber}/byes/td"
+          }
+        },
+        {
+          "name": "Refresh Round Results",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Cookie", "value": "litd_session={{litd_session}}", "type": "text" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/tournaments/{{tournamentId}}/rounds/{{roundNumber}}/results/refresh",
+              "host": ["{{baseUrl}}"],
+              "path": ["tournaments", "{{tournamentId}}", "rounds", "{{roundNumber}}", "results", "refresh"]
+            },
+            "description": "POST /tournaments/{tournamentId}/rounds/{roundNumber}/results/refresh"
+          }
+        },
+        {
+          "name": "End Active Round",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Cookie", "value": "litd_session={{litd_session}}", "type": "text" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/tournaments/{{tournamentId}}/rounds/{{roundNumber}}/end",
+              "host": ["{{baseUrl}}"],
+              "path": ["tournaments", "{{tournamentId}}", "rounds", "{{roundNumber}}", "end"]
+            },
+            "description": "POST /tournaments/{tournamentId}/rounds/{roundNumber}/end"
+          }
+        },
+        {
+          "name": "Override Pairing Result",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json", "type": "text" },
+              { "key": "Cookie", "value": "litd_session={{litd_session}}", "type": "text" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"result\": \"draw\",\n  \"reason\": \"Manual TD correction\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/tournaments/{{tournamentId}}/pairings/{{pairingId}}/result/override",
+              "host": ["{{baseUrl}}"],
+              "path": ["tournaments", "{{tournamentId}}", "pairings", "{{pairingId}}", "result", "override"]
+            },
+            "description": "POST /tournaments/{tournamentId}/pairings/{pairingId}/result/override"
+          }
+        }
+      ]
+    }
+  ]
+}
