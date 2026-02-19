@@ -153,6 +153,7 @@ object MainObject {
     system.log.info("Server running at {}", binding.localAddress)
 
     try {
+      println("LiTD is running. Press [Enter] to shutdown.")
       StdIn.readLine()
     } catch {
       case NonFatal(ex) =>
