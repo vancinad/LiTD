@@ -4,7 +4,10 @@ import litd.auth.AuthError.{BadRequest, External, Forbidden, Unauthorized}
 import litd.domain.{OAuthTokenDocument, TeamMembershipCacheDocument}
 import litd.mongo.repository.{OAuthTokenRepository, TeamMembershipCacheRepository}
 
+import java.nio.charset.StandardCharsets
+import java.security.{MessageDigest, SecureRandom}
 import java.time.Instant
+import java.util.Base64
 import java.util.Date
 import scala.concurrent.{ExecutionContext, Future}
 
@@ -16,25 +19,30 @@ final class AuthService(
     oauthTokenRepository: OAuthTokenRepository,
     teamMembershipCacheRepository: TeamMembershipCacheRepository
 )(implicit ec: ExecutionContext) {
+  private val secureRandom = new SecureRandom()
+
   def startOAuth(): String = {
-    val state = oauthStateStore.issueState()
-    lichessApiClient.authorizeUrl(state)
+    val codeVerifier = generateCodeVerifier()
+    val state = oauthStateStore.issueState(codeVerifier)
+    val codeChallenge = codeChallengeFromVerifier(codeVerifier)
+    lichessApiClient.authorizeUrl(state, codeChallenge)
   }
 
   def finishOAuth(code: String, state: String): Future[Either[AuthError, OAuthCallbackResult]] = {
-    if (!oauthStateStore.consumeState(state)) {
-      Future.successful(Left(BadRequest("OAuth state is invalid or expired")))
-    } else {
-      for {
-        token <- lichessApiClient.exchangeCodeForToken(code)
-        userId <- lichessApiClient.currentUserId(token.accessToken)
-        membership <- checkMembership(userId, token.accessToken)
-        result <- if (!membership) {
-          Future.successful(Left(Forbidden(s"User '$userId' is not in required team '${config.lichess.teamId}'")))
-        } else {
-          persistToken(userId, token).map(Right(_))
-        }
-      } yield result
+    oauthStateStore.consumeState(state) match {
+      case None =>
+        Future.successful(Left(BadRequest("OAuth state is invalid or expired")))
+      case Some(codeVerifier) =>
+        for {
+          token <- lichessApiClient.exchangeCodeForToken(code, codeVerifier)
+          userId <- lichessApiClient.currentUserId(token.accessToken)
+          membership <- checkMembership(userId, token.accessToken)
+          result <- if (!membership) {
+            Future.successful(Left(Forbidden(s"User '$userId' is not in required team '${config.lichess.teamId}'")))
+          } else {
+            persistToken(userId, token).map(Right(_))
+          }
+        } yield result
     }
   }
 
@@ -105,5 +113,16 @@ final class AuthService(
           }
     }
   }
-}
 
+  private def generateCodeVerifier(): String = {
+    val bytes = new Array[Byte](32)
+    secureRandom.nextBytes(bytes)
+    Base64.getUrlEncoder.withoutPadding().encodeToString(bytes)
+  }
+
+  private def codeChallengeFromVerifier(codeVerifier: String): String = {
+    val digest = MessageDigest.getInstance("SHA-256")
+    val hash = digest.digest(codeVerifier.getBytes(StandardCharsets.US_ASCII))
+    Base64.getUrlEncoder.withoutPadding().encodeToString(hash)
+  }
+}

@@ -14,7 +14,7 @@ import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import scala.concurrent.duration._
 import scala.concurrent.{ExecutionContext, Future}
-import scala.util.Try
+import scala.util.{Failure, Try}
 
 final class LichessApiClient(
     config: LichessAuthConfig
@@ -22,40 +22,37 @@ final class LichessApiClient(
   private val classicSystem = system.toClassic
   private val requestTimeout: FiniteDuration = config.requestTimeoutMillis.millis
 
-  def authorizeUrl(state: String): String = {
+  def authorizeUrl(state: String, codeChallenge: String): String = {
     val params = Seq(
       "response_type" -> "code",
       "client_id" -> config.clientId,
       "redirect_uri" -> config.redirectUri,
       "scope" -> config.scope,
-      "state" -> state
+      "state" -> state,
+      "code_challenge_method" -> "S256",
+      "code_challenge" -> codeChallenge
     )
     s"${config.baseUrl}/oauth?${encodeParams(params)}"
   }
 
-  def exchangeCodeForToken(code: String): Future[OAuthTokenResponse] = {
+  def exchangeCodeForToken(code: String, codeVerifier: String): Future[OAuthTokenResponse] = {
     val formData = FormData(
       "grant_type" -> "authorization_code",
       "code" -> code,
       "client_id" -> config.clientId,
       "client_secret" -> config.clientSecret,
-      "redirect_uri" -> config.redirectUri
+      "redirect_uri" -> config.redirectUri,
+      "code_verifier" -> codeVerifier
     )
     val request = HttpRequest(
       method = HttpMethods.POST,
       uri = s"${config.baseUrl}/api/token",
+      headers = List(headers.Accept(MediaTypes.`application/json`)),
       entity = formData.toEntity
     )
 
-    withRetries(request).flatMap { json =>
-      Future.fromTry {
-        for {
-          token <- json.hcursor.get[String]("access_token").toTry
-          tokenType = json.hcursor.get[String]("token_type").getOrElse("Bearer")
-          scope = json.hcursor.get[String]("scope").getOrElse(config.scope)
-          expires = json.hcursor.get[Int]("expires_in").toOption
-        } yield OAuthTokenResponse(token, tokenType, scope, expires)
-      }.recoverWith { case ex =>
+    withRetriesBody(request).flatMap { body =>
+      Future.fromTry(parseOAuthTokenResponse(body)).recoverWith { case ex =>
         Future.failed(new RuntimeException(s"Failed to parse Lichess token response: ${ex.getMessage}", ex))
       }
     }
@@ -167,15 +164,52 @@ final class LichessApiClient(
       withTimeout(Http()(classicSystem).singleRequest(request), requestTimeout).flatMap(decodeResponse)
     }
 
+  private def withRetriesBody(request: HttpRequest): Future[String] =
+    retry(config.retryCount.max(1)) {
+      withTimeout(Http()(classicSystem).singleRequest(request), requestTimeout).flatMap(decodeBody)
+    }
+
   private def decodeResponse(response: HttpResponse): Future[Json] =
+    decodeBody(response).flatMap { body =>
+      Future.fromTry(parse(body).toTry)
+    }
+
+  private def decodeBody(response: HttpResponse): Future[String] =
     withTimeout(response.entity.toStrict(requestTimeout), requestTimeout).flatMap { strict =>
       val body = strict.data.utf8String
       if (!response.status.isSuccess()) {
         Future.failed(new RuntimeException(s"Lichess API ${response.status.intValue()}: $body"))
       } else {
-        Future.fromTry(parse(body).toTry)
+        Future.successful(body)
       }
     }
+
+  private def parseOAuthTokenResponse(body: String): Try[OAuthTokenResponse] =
+    parse(body).toTry
+      .flatMap { json =>
+        for {
+          token <- json.hcursor.get[String]("access_token").toTry
+          tokenType = json.hcursor.get[String]("token_type").getOrElse("Bearer")
+          scope = json.hcursor.get[String]("scope").getOrElse(config.scope)
+          expires = json.hcursor.get[Int]("expires_in").toOption
+        } yield OAuthTokenResponse(token, tokenType, scope, expires)
+      }
+      .recoverWith { case _ =>
+        parseFormEncodedTokenResponse(body)
+      }
+
+  private def parseFormEncodedTokenResponse(body: String): Try[OAuthTokenResponse] = {
+    val query = Query(body)
+    query.get("access_token") match {
+      case Some(token) =>
+        val tokenType = query.get("token_type").getOrElse("Bearer")
+        val scope = query.get("scope").getOrElse(config.scope)
+        val expires = query.get("expires_in").flatMap(_.toIntOption)
+        Try(OAuthTokenResponse(token, tokenType, scope, expires))
+      case None =>
+        Failure(new RuntimeException(s"Token payload missing access_token: $body"))
+    }
+  }
 
   private def retry[T](attempts: Int)(thunk: => Future[T]): Future[T] =
     thunk.recoverWith { case ex if attempts > 1 =>

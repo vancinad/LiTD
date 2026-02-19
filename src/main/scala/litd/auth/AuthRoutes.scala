@@ -26,31 +26,44 @@ final class AuthRoutes(
   private val callbackRoute: Route =
     path("auth" / "lichess" / "callback") {
       get {
-        parameters("code", "state") { (code, state) =>
-          onComplete(authService.finishOAuth(code, state)) {
-            case Success(Right(result)) =>
-              setCookie(
-                HttpCookie(
-                  name = config.session.cookieName,
-                  value = result.sessionToken,
-                  httpOnly = true,
-                  secure = config.session.secureCookie,
-                  maxAge = Some(config.session.maxAgeSeconds.toLong),
-                  path = Some("/")
-                )
-              ) {
-                complete(
-                  StatusCodes.OK -> Map(
-                    "status" -> "authenticated",
-                    "lichessUserId" -> result.lichessUserId,
-                    "sessionExpiresAt" -> result.expiresAt.map(_.toString).getOrElse("unknown")
-                  ).asJson.noSpaces
-                )
+        parameters("code".?, "state".?, "error".?, "error_description".?) { (codeOpt, stateOpt, errorOpt, errorDescOpt) =>
+          errorOpt match {
+            case Some(errorValue) =>
+              val details = errorDescOpt.filter(_.trim.nonEmpty).getOrElse("No details provided")
+              complete(
+                StatusCodes.BadRequest -> Map("error" -> s"Lichess OAuth error: $errorValue ($details)").asJson.noSpaces
+              )
+            case None =>
+              (codeOpt, stateOpt) match {
+                case (Some(code), Some(state)) =>
+                  onComplete(authService.finishOAuth(code, state)) {
+                    case Success(Right(result)) =>
+                      setCookie(
+                        HttpCookie(
+                          name = config.session.cookieName,
+                          value = result.sessionToken,
+                          httpOnly = true,
+                          secure = config.session.secureCookie,
+                          maxAge = Some(config.session.maxAgeSeconds.toLong),
+                          path = Some("/")
+                        )
+                      ) {
+                        complete(
+                          StatusCodes.OK -> Map(
+                            "status" -> "authenticated",
+                            "lichessUserId" -> result.lichessUserId,
+                            "sessionExpiresAt" -> result.expiresAt.map(_.toString).getOrElse("unknown")
+                          ).asJson.noSpaces
+                        )
+                      }
+                    case Success(Left(error)) =>
+                      complete(error.status -> Map("error" -> error.message).asJson.noSpaces)
+                    case Failure(ex) =>
+                      complete(StatusCodes.BadGateway -> Map("error" -> ex.getMessage).asJson.noSpaces)
+                  }
+                case _ =>
+                  complete(StatusCodes.BadRequest -> Map("error" -> "Missing OAuth callback parameters").asJson.noSpaces)
               }
-            case Success(Left(error)) =>
-              complete(error.status -> Map("error" -> error.message).asJson.noSpaces)
-            case Failure(ex) =>
-              complete(StatusCodes.BadGateway -> Map("error" -> ex.getMessage).asJson.noSpaces)
           }
         }
       }
