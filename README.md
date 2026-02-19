@@ -25,6 +25,14 @@ The health endpoint should respond with `ok`:
 curl http://localhost:8080/health
 ```
 
+### API Notes
+
+- Tournament routes are under `/tournaments/...` and require authenticated Lichess session cookies.
+- Public read models are under `/public/tournaments/{tournamentId}/standings` and `/public/tournaments/{tournamentId}/crosstable`.
+- Challenge issuance (`POST /tournaments/{tournamentId}/pairings/{pairingId}/challenge`) is idempotent:
+  - first successful issue stores `challengeId`
+  - repeated calls return the same `challengeId` with status `already_issued`
+
 References:
 * [Lichess Feedback - Clocks start automatically in Swiss Tournament?!](https://lichess.org/forum/redirect/post/L9boi7eP)
 * [Lichess Feedback - starting timer should be removed#3](https://lichess.org/forum/redirect/post/AvLmQzeD)

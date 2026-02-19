@@ -53,7 +53,7 @@ final class TournamentRoutes(
         onComplete(authService.authenticate(cookie.value)) {
           case Success(Right(user)) => inner(user)
           case Success(Left(error)) => complete(error.status -> Map("error" -> error.message).asJson.noSpaces)
-          case Failure(ex)          => complete(StatusCodes.BadGateway -> Map("error" -> ex.getMessage).asJson.noSpaces)
+          case Failure(_) => completeUnexpectedFailure(StatusCodes.BadGateway)
         }
     }
 
@@ -67,6 +67,9 @@ final class TournamentRoutes(
 
   private def completeDomainError(error: TournamentError): Route =
     complete(error.status -> Map("error" -> error.message).asJson.noSpaces)
+
+  private def completeUnexpectedFailure(status: akka.http.scaladsl.model.StatusCode): Route =
+    complete(status -> Map("error" -> "Unexpected server error").asJson.noSpaces)
 
   private def decodeBody[T: Decoder](rawBody: String): Either[TournamentError, T] =
     decode[T](rawBody).left.map(err => TournamentError.BadRequest(s"Invalid request body: ${err.getMessage}"))
@@ -83,7 +86,7 @@ final class TournamentRoutes(
                 onComplete(tournamentService.createTournament(request)) {
                   case Success(Right(created)) => complete(StatusCodes.Created -> created.asJson.noSpaces)
                   case Success(Left(error))    => completeDomainError(error)
-                  case Failure(ex)             => complete(StatusCodes.InternalServerError -> Map("error" -> ex.getMessage).asJson.noSpaces)
+                  case Failure(_) => completeUnexpectedFailure(StatusCodes.InternalServerError)
                 }
             }
           }
@@ -102,7 +105,7 @@ final class TournamentRoutes(
               onComplete(tournamentService.registerPlayer(tournamentId, user.lichessUserId)) {
                 case Success(Right(registered)) => complete(StatusCodes.Created -> registered.asJson.noSpaces)
                 case Success(Left(error))       => completeDomainError(error)
-                case Failure(ex)                => complete(StatusCodes.InternalServerError -> Map("error" -> ex.getMessage).asJson.noSpaces)
+                case Failure(_) => completeUnexpectedFailure(StatusCodes.InternalServerError)
               }
           }
         }
@@ -120,7 +123,7 @@ final class TournamentRoutes(
               onComplete(tournamentService.withdrawPlayer(tournamentId, user.lichessUserId)) {
                 case Success(Right(updated)) => complete(StatusCodes.OK -> updated.asJson.noSpaces)
                 case Success(Left(error))    => completeDomainError(error)
-                case Failure(ex)             => complete(StatusCodes.InternalServerError -> Map("error" -> ex.getMessage).asJson.noSpaces)
+                case Failure(_) => completeUnexpectedFailure(StatusCodes.InternalServerError)
               }
           }
         }
@@ -138,7 +141,7 @@ final class TournamentRoutes(
               onComplete(tournamentService.reactivatePlayer(tournamentId, user.lichessUserId)) {
                 case Success(Right(updated)) => complete(StatusCodes.OK -> updated.asJson.noSpaces)
                 case Success(Left(error))    => completeDomainError(error)
-                case Failure(ex)             => complete(StatusCodes.InternalServerError -> Map("error" -> ex.getMessage).asJson.noSpaces)
+                case Failure(_) => completeUnexpectedFailure(StatusCodes.InternalServerError)
               }
           }
         }
@@ -160,7 +163,7 @@ final class TournamentRoutes(
                     onComplete(tournamentService.generateNextRound(tournamentId, request)) {
                       case Success(Right(result)) => complete(StatusCodes.Created -> result.asJson.noSpaces)
                       case Success(Left(error))   => completeDomainError(error)
-                      case Failure(ex)            => complete(StatusCodes.InternalServerError -> Map("error" -> ex.getMessage).asJson.noSpaces)
+                      case Failure(_) => completeUnexpectedFailure(StatusCodes.InternalServerError)
                     }
                 }
               }
@@ -184,7 +187,7 @@ final class TournamentRoutes(
                     onComplete(tournamentService.grantTdBye(tournamentId, roundNumber, request)) {
                       case Success(Right(result)) => complete(StatusCodes.Created -> result.asJson.noSpaces)
                       case Success(Left(error))   => completeDomainError(error)
-                      case Failure(ex)            => complete(StatusCodes.InternalServerError -> Map("error" -> ex.getMessage).asJson.noSpaces)
+                      case Failure(_) => completeUnexpectedFailure(StatusCodes.InternalServerError)
                     }
                 }
               }
@@ -203,9 +206,11 @@ final class TournamentRoutes(
             case (_, Left(error))            => completeDomainError(error)
             case (Right(tournamentId), Right(pairingId)) =>
               onComplete(tournamentService.issueChallenge(tournamentId, pairingId, user)) {
-                case Success(Right(result)) => complete(StatusCodes.Created -> result.asJson.noSpaces)
+                case Success(Right(result)) =>
+                  val status = if (result.status == "already_issued") StatusCodes.OK else StatusCodes.Created
+                  complete(status -> result.asJson.noSpaces)
                 case Success(Left(error))   => completeDomainError(error)
-                case Failure(ex)            => complete(StatusCodes.BadGateway -> Map("error" -> ex.getMessage).asJson.noSpaces)
+                case Failure(_) => completeUnexpectedFailure(StatusCodes.BadGateway)
               }
           }
         }
@@ -223,7 +228,7 @@ final class TournamentRoutes(
               onComplete(tournamentService.refreshRoundResults(tournamentId, roundNumber, user)) {
                 case Success(Right(result)) => complete(StatusCodes.OK -> result.asJson.noSpaces)
                 case Success(Left(error))   => completeDomainError(error)
-                case Failure(ex)            => complete(StatusCodes.BadGateway -> Map("error" -> ex.getMessage).asJson.noSpaces)
+                case Failure(_) => completeUnexpectedFailure(StatusCodes.BadGateway)
               }
           }
         }
@@ -241,7 +246,7 @@ final class TournamentRoutes(
               onComplete(tournamentService.endRound(tournamentId, roundNumber)) {
                 case Success(Right(result)) => complete(StatusCodes.OK -> result.asJson.noSpaces)
                 case Success(Left(error))   => completeDomainError(error)
-                case Failure(ex)            => complete(StatusCodes.InternalServerError -> Map("error" -> ex.getMessage).asJson.noSpaces)
+                case Failure(_) => completeUnexpectedFailure(StatusCodes.InternalServerError)
               }
           }
         }
@@ -264,7 +269,7 @@ final class TournamentRoutes(
                     onComplete(tournamentService.overridePairingResult(tournamentId, pairingId, request, user)) {
                       case Success(Right(result)) => complete(StatusCodes.OK -> result.asJson.noSpaces)
                       case Success(Left(error))   => completeDomainError(error)
-                      case Failure(ex)            => complete(StatusCodes.InternalServerError -> Map("error" -> ex.getMessage).asJson.noSpaces)
+                      case Failure(_) => completeUnexpectedFailure(StatusCodes.InternalServerError)
                     }
                 }
               }
@@ -283,7 +288,7 @@ final class TournamentRoutes(
             onComplete(tournamentService.getStandings(tournamentId)) {
               case Success(Right(result)) => complete(StatusCodes.OK -> result.asJson.noSpaces)
               case Success(Left(error))   => completeDomainError(error)
-              case Failure(ex)            => complete(StatusCodes.InternalServerError -> Map("error" -> ex.getMessage).asJson.noSpaces)
+              case Failure(_) => completeUnexpectedFailure(StatusCodes.InternalServerError)
             }
         }
       }
@@ -299,7 +304,7 @@ final class TournamentRoutes(
             onComplete(tournamentService.getCrosstable(tournamentId)) {
               case Success(Right(result)) => complete(StatusCodes.OK -> result.asJson.noSpaces)
               case Success(Left(error))   => completeDomainError(error)
-              case Failure(ex)            => complete(StatusCodes.InternalServerError -> Map("error" -> ex.getMessage).asJson.noSpaces)
+              case Failure(_) => completeUnexpectedFailure(StatusCodes.InternalServerError)
             }
         }
       }

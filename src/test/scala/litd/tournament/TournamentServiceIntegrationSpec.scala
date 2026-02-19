@@ -221,6 +221,41 @@ final class TournamentServiceIntegrationSpec
     persisted.flatMap(_.challengeId) shouldBe Some("challenge-123")
   }
 
+  test("issue challenge is idempotent when pairing already has challengeId") {
+    requireDocker()
+    val gateway = new FakeChallengeGateway(
+      issueResponse = Right(IssuedChallenge("challenge-777", "created")),
+      lookupResponse = Right(None)
+    )
+    val (service, repositories, _, _) = freshServiceContext(challengeGateway = gateway)
+    val createdTournament = awaitDomain(service.createTournament(CreateTournamentRequest("Challenge idempotency", 4)))
+    val tournamentId = new ObjectId(createdTournament.id)
+
+    awaitDomain(service.registerPlayer(tournamentId, "white-player"))
+    awaitDomain(service.registerPlayer(tournamentId, "black-player"))
+    awaitDomain(service.generateNextRound(tournamentId, GenerateRoundRequest()))
+
+    val pairing = awaitFuture(repositories.pairings.listByTournament(tournamentId)).head
+    val firstIssue = awaitDomain(
+      service.issueChallenge(
+        tournamentId = tournamentId,
+        pairingId = pairing._id.get,
+        user = AuthenticatedUser("white-player", "token-a")
+      )
+    )
+    firstIssue.status shouldBe "created"
+
+    val secondIssue = awaitDomain(
+      service.issueChallenge(
+        tournamentId = tournamentId,
+        pairingId = pairing._id.get,
+        user = AuthenticatedUser("white-player", "token-a")
+      )
+    )
+    secondIssue.challengeId shouldBe firstIssue.challengeId
+    secondIssue.status shouldBe "already_issued"
+  }
+
   test("challenge sync worker updates gameId after challenge game starts") {
     requireDocker()
     implicit val workerSystem: ActorSystem[Nothing] = ActorSystem(Behaviors.empty, "challenge-worker-test")

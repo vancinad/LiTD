@@ -56,7 +56,8 @@ object MigrationRunner {
       Seq(
         InitialCollectionsAndIndexesMigration,
         OAuthAndTeamGateMigration,
-        ChallengeIssuanceMigration
+        ChallengeIssuanceMigration,
+        SchemaEvolutionBackfillMigration
       )
     )
 }

@@ -23,12 +23,15 @@ import litd.mongo.repository.{
   TournamentRepository
 }
 import litd.tournament.TournamentError.{BadRequest, Conflict, External, NotFound}
+import com.mongodb.{MongoBulkWriteException, MongoWriteException}
 import org.bson.Document
 import org.bson.types.ObjectId
 import org.mongodb.scala._
 
 import java.util.Date
 import scala.concurrent.{ExecutionContext, Future}
+import scala.jdk.CollectionConverters._
+import scala.util.{Failure, Success}
 
 import litd.tournament.TournamentService.{PlannedBye, RoundPlan, StateAccumulator}
 
@@ -158,7 +161,17 @@ final class TournamentService(
         case Some(pairing) if pairing.gameId.nonEmpty =>
           Future.successful(Left(Conflict("Pairing already has an associated gameId")))
         case Some(pairing) if pairing.challengeId.nonEmpty =>
-          Future.successful(Left(Conflict("Challenge already issued for this pairing")))
+          // Milestone 8 hardening: replaying the same request returns the persisted challenge.
+          Future.successful(
+            Right(
+              toIssueChallengeView(
+                tournamentId = tournamentId,
+                pairing = pairing,
+                challengeId = pairing.challengeId.get,
+                status = "already_issued"
+              )
+            )
+          )
         case Some(pairing) =>
           challengeGateway.issueChallenge(pairing.blackLichessUserId, user.accessToken).flatMap {
             case Left(errorMessage) => Future.successful(Left(External(s"Challenge issuance failed: $errorMessage")))
@@ -666,7 +679,19 @@ final class TournamentService(
         )
         .flatMap {
           case false =>
-            Future.successful(Left(Conflict("Challenge was already issued by another request")))
+            pairingRepository.findByTournamentAndId(session, tournamentId, pairingId).map {
+              case Some(updatedPairing) if updatedPairing.challengeId.nonEmpty =>
+                Right(
+                  toIssueChallengeView(
+                    tournamentId = tournamentId,
+                    pairing = updatedPairing,
+                    challengeId = updatedPairing.challengeId.get,
+                    status = "already_issued"
+                  )
+                )
+              case _ =>
+                Left(Conflict("Challenge was already issued by another request"))
+            }
           case true =>
             auditEventRepository
               .insert(
@@ -679,21 +704,25 @@ final class TournamentService(
                   createdAt = now
                 )
               )
-              .map(_ =>
-                Right(
-                  IssueChallengeView(
-                    tournamentId = tournamentId.toHexString,
-                    pairingId = pairingId.toHexString,
-                    roundNumber = pairing.roundNumber,
-                    whiteLichessUserId = pairing.whiteLichessUserId,
-                    blackLichessUserId = pairing.blackLichessUserId,
-                    challengeId = issuedChallenge.challengeId,
-                    status = issuedChallenge.status
-                  )
-                )
-              )
+              .map(_ => Right(toIssueChallengeView(tournamentId, pairing, issuedChallenge.challengeId, issuedChallenge.status)))
         }
     }
+
+  private def toIssueChallengeView(
+      tournamentId: ObjectId,
+      pairing: PairingDocument,
+      challengeId: String,
+      status: String
+  ): IssueChallengeView =
+    IssueChallengeView(
+      tournamentId = tournamentId.toHexString,
+      pairingId = pairing._id.get.toHexString,
+      roundNumber = pairing.roundNumber,
+      whiteLichessUserId = pairing.whiteLichessUserId,
+      blackLichessUserId = pairing.blackLichessUserId,
+      challengeId = challengeId,
+      status = status
+    )
 
   private def refreshRoundResultsForTournament(
       tournamentId: ObjectId,
@@ -1190,22 +1219,42 @@ final class TournamentService(
   ): Future[Either[TournamentError, T]] =
     mongoClient.startSession().toFuture().flatMap { session =>
       session.startTransaction()
-      op(session)
-        .flatMap {
-          case right @ Right(_) =>
-            org.mongodb.scala.ToSingleObservableUnit(session.commitTransaction()).toFuture().map(_ => right)
-          case left @ Left(_) =>
-            org.mongodb.scala.ToSingleObservableUnit(session.abortTransaction()).toFuture().map(_ => left)
-        }
-        .recoverWith { case error =>
-          org.mongodb.scala
-            .ToSingleObservableUnit(session.abortTransaction())
-            .toFuture()
-            .recover(_ => ())
-            .flatMap(_ => Future.failed(error))
-        }
+      op(session).transformWith {
+        case Success(right @ Right(_)) =>
+          org.mongodb.scala.ToSingleObservableUnit(session.commitTransaction()).toFuture().map(_ => right)
+        case Success(left @ Left(_)) =>
+          abortTransactionQuietly(session).map(_ => left)
+        case Failure(error) if isDuplicateKeyError(error) =>
+          // Milestone 8 hardening: turn racing unique-index violations into deterministic domain conflicts.
+          abortTransactionQuietly(session)
+            .map(_ => Left(Conflict("Operation conflicted with a concurrent write; retry the request")))
+        case Failure(error) =>
+          abortTransactionQuietly(session).flatMap(_ => Future.failed(error))
+      }
         .andThen { case _ => session.close() }
     }
+
+  private def abortTransactionQuietly(session: ClientSession): Future[Unit] =
+    org.mongodb.scala.ToSingleObservableUnit(session.abortTransaction()).toFuture().recover(_ => ())
+
+  private def isDuplicateKeyError(error: Throwable): Boolean = {
+    @scala.annotation.tailrec
+    def loop(current: Throwable): Boolean =
+      if (current == null) {
+        false
+      } else {
+        current match {
+          case write: MongoWriteException =>
+            write.getError != null && write.getError.getCode == 11000
+          case bulk: MongoBulkWriteException =>
+            bulk.getWriteErrors.asScala.exists(_.getCode == 11000)
+          case _ =>
+            loop(current.getCause)
+        }
+      }
+
+    loop(error)
+  }
 
 }
 
