@@ -57,7 +57,9 @@ object MigrationRunner {
         InitialCollectionsAndIndexesMigration,
         OAuthAndTeamGateMigration,
         ChallengeIssuanceMigration,
-        SchemaEvolutionBackfillMigration
+        SchemaEvolutionBackfillMigration,
+        TournamentTeamMigration,
+        TournamentTimeControlMigration
       )
     )
 }

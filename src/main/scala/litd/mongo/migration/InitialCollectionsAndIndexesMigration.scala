@@ -22,6 +22,7 @@ object InitialCollectionsAndIndexesMigration extends Migration {
 
     val ops = Seq(
       tournaments.createIndex(Indexes.ascending("status")).toFuture(),
+      tournaments.createIndex(Indexes.ascending("teamId")).toFuture(),
       registrations
         .createIndex(
           Indexes.ascending("tournamentId", "lichessUserId"),
@@ -79,4 +80,3 @@ object InitialCollectionsAndIndexesMigration extends Migration {
     Future.sequence(ops).map(_ => ())
   }
 }
-

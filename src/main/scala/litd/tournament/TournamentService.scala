@@ -51,18 +51,40 @@ final class TournamentService(
   /** Creates a tournament with spec-capped configured rounds and draft status. */
   def createTournament(request: CreateTournamentRequest): Future[Either[TournamentError, TournamentView]] = {
     val trimmedName = request.name.trim
+    val trimmedTeamId = request.teamId.trim
 
     if (trimmedName.isEmpty) {
       Future.successful(Left(BadRequest("Tournament name must not be empty")))
+    } else if (trimmedTeamId.isEmpty) {
+      Future.successful(Left(BadRequest("teamId must not be empty")))
     } else if (!TournamentRules.isValidConfiguredMaxRounds(request.configuredMaxRounds)) {
       Future.successful(
         Left(BadRequest(s"configuredMaxRounds must be between 1 and ${TournamentRules.MaxConfiguredRounds}"))
+      )
+    } else if (!TournamentRules.isValidTimeControlInitialSeconds(request.timeControlInitialSeconds)) {
+      Future.successful(
+        Left(
+          BadRequest(
+            s"timeControlInitialSeconds must be between ${TournamentRules.MinTimeControlInitialSeconds} and ${TournamentRules.MaxTimeControlInitialSeconds}"
+          )
+        )
+      )
+    } else if (!TournamentRules.isValidTimeControlIncrementSeconds(request.timeControlIncrementSeconds)) {
+      Future.successful(
+        Left(
+          BadRequest(
+            s"timeControlIncrementSeconds must be between ${TournamentRules.MinTimeControlIncrementSeconds} and ${TournamentRules.MaxTimeControlIncrementSeconds}"
+          )
+        )
       )
     } else {
       val now = new Date()
       val document = TournamentDocument(
         _id = Some(new ObjectId()),
         name = trimmedName,
+        teamId = trimmedTeamId,
+        timeControlInitialSeconds = request.timeControlInitialSeconds,
+        timeControlIncrementSeconds = request.timeControlIncrementSeconds,
         status = "draft",
         configuredMaxRounds = request.configuredMaxRounds,
         effectiveMaxRounds = request.configuredMaxRounds,
@@ -71,17 +93,8 @@ final class TournamentService(
       )
 
       tournamentRepository.insert(document).map { inserted =>
-        val id = inserted._id.map(_.toHexString).getOrElse("")
         Right(
-          TournamentView(
-            id = id,
-            name = inserted.name,
-            status = inserted.status,
-            configuredMaxRounds = inserted.configuredMaxRounds,
-            effectiveMaxRounds = inserted.effectiveMaxRounds,
-            createdAt = inserted.createdAt.toInstant.toString,
-            updatedAt = inserted.updatedAt.toInstant.toString
-          )
+          toTournamentView(inserted)
         )
       }
     }
@@ -153,30 +166,41 @@ final class TournamentService(
       user: AuthenticatedUser
   ): Future[Either[TournamentError, IssueChallengeView]] =
     for {
-      pairingOpt <- pairingRepository.findByTournamentAndId(tournamentId, pairingId)
-      result <- pairingOpt match {
-        case None => Future.successful(Left(NotFound(s"Pairing '${pairingId.toHexString}' not found in tournament")))
-        case Some(pairing) if pairing.whiteLichessUserId != user.lichessUserId =>
-          Future.successful(Left(Conflict("Only the white player can issue the challenge for this pairing")))
-        case Some(pairing) if pairing.gameId.nonEmpty =>
-          Future.successful(Left(Conflict("Pairing already has an associated gameId")))
-        case Some(pairing) if pairing.challengeId.nonEmpty =>
-          // Milestone 8 hardening: replaying the same request returns the persisted challenge.
-          Future.successful(
-            Right(
-              toIssueChallengeView(
-                tournamentId = tournamentId,
-                pairing = pairing,
-                challengeId = pairing.challengeId.get,
-                status = "already_issued"
+      tournamentOpt <- tournamentRepository.findByIdOption(tournamentId)
+      result <- tournamentOpt match {
+        case None => Future.successful(Left(NotFound(s"Tournament '${tournamentId.toHexString}' not found")))
+        case Some(tournament) =>
+          pairingRepository.findByTournamentAndId(tournamentId, pairingId).flatMap {
+            case None => Future.successful(Left(NotFound(s"Pairing '${pairingId.toHexString}' not found in tournament")))
+            case Some(pairing) if pairing.whiteLichessUserId != user.lichessUserId =>
+              Future.successful(Left(Conflict("Only the white player can issue the challenge for this pairing")))
+            case Some(pairing) if pairing.gameId.nonEmpty =>
+              Future.successful(Left(Conflict("Pairing already has an associated gameId")))
+            case Some(pairing) if pairing.challengeId.nonEmpty =>
+              // Milestone 8 hardening: replaying the same request returns the persisted challenge.
+              Future.successful(
+                Right(
+                  toIssueChallengeView(
+                    tournamentId = tournamentId,
+                    pairing = pairing,
+                    challengeId = pairing.challengeId.get,
+                    status = "already_issued"
+                  )
+                )
               )
-            )
-          )
-        case Some(pairing) =>
-          challengeGateway.issueChallenge(pairing.blackLichessUserId, user.accessToken).flatMap {
-            case Left(errorMessage) => Future.successful(Left(External(s"Challenge issuance failed: $errorMessage")))
-            case Right(issued) =>
-              persistIssuedChallenge(tournamentId, pairing, issued)
+            case Some(pairing) =>
+              challengeGateway
+                .issueChallenge(
+                  opponentLichessUserId = pairing.blackLichessUserId,
+                  accessToken = user.accessToken,
+                  initialSeconds = tournament.timeControlInitialSeconds,
+                  incrementSeconds = tournament.timeControlIncrementSeconds
+                )
+                .flatMap {
+                  case Left(errorMessage) => Future.successful(Left(External(s"Challenge issuance failed: $errorMessage")))
+                  case Right(issued) =>
+                    persistIssuedChallenge(tournamentId, pairing, issued)
+                }
           }
       }
     } yield result
@@ -273,6 +297,107 @@ final class TournamentService(
                 tournamentId = tournamentId.toHexString,
                 roundCount = latestRoundNumber.getOrElse(0),
                 entries = ranked
+              )
+            )
+          }
+      }
+    } yield result
+
+  /** API query: list public tournaments suitable for landing page discovery. */
+  def listPublicTournaments(limit: Int = 30): Future[PublicTournamentListView] =
+    tournamentRepository.listByStatuses(statuses = Seq("draft", "active", "completed"), limit = limit).flatMap {
+      tournaments => Future.sequence(tournaments.map(toPublicTournamentCard)).map(items => PublicTournamentListView(items))
+    }
+
+  /** API query: fetch a tournament by id for authorization and hub composition. */
+  def getTournament(tournamentId: ObjectId): Future[Either[TournamentError, TournamentView]] =
+    tournamentRepository.findByIdOption(tournamentId).map {
+      case None => Left(NotFound(s"Tournament '${tournamentId.toHexString}' not found"))
+      case Some(tournament) => Right(toTournamentView(tournament))
+    }
+
+  /** API query: list tournaments visible to a user based on their team memberships. */
+  def listTournamentsByTeams(teamIds: Seq[String], limit: Int = 30): Future[PublicTournamentListView] =
+    tournamentRepository
+      .listByTeamIdsAndStatuses(teamIds.distinct, statuses = Seq("draft", "active", "completed"), limit = limit)
+      .flatMap(tournaments => Future.sequence(tournaments.map(toPublicTournamentCard)).map(items => PublicTournamentListView(items)))
+
+  /** API query: list tournaments where a user has a registration record. */
+  def listMyTournaments(lichessUserId: String, limit: Int = 30): Future[PublicTournamentListView] =
+    registrationRepository.listByUser(lichessUserId, limit = limit).flatMap { registrations =>
+      val tournamentIds = registrations.map(_.tournamentId).distinct
+      Future
+        .sequence(
+          tournamentIds.map { tournamentId =>
+            tournamentRepository.findByIdOption(tournamentId).flatMap {
+              case Some(tournament) => toPublicTournamentCard(tournament).map(Some(_))
+              case None => Future.successful(None)
+            }
+          }
+        )
+        .map(cards => PublicTournamentListView(cards.flatten))
+    }
+
+  /** API query: return tournament hub summary with current round progress counters. */
+  def getTournamentHub(tournamentId: ObjectId): Future[Either[TournamentError, TournamentHubView]] =
+    for {
+      tournamentOpt <- tournamentRepository.findByIdOption(tournamentId)
+      result <- tournamentOpt match {
+        case None => Future.successful(Left(NotFound(s"Tournament '${tournamentId.toHexString}' not found")))
+        case Some(tournament) =>
+          roundRepository.latestRoundForTournament(tournamentId).flatMap {
+            case None =>
+              Future.successful(
+                Right(
+                  TournamentHubView(
+                    tournament = toTournamentView(tournament),
+                    currentRoundNumber = 0,
+                    currentRoundStatus = "pending",
+                    roundProgress = None
+                  )
+                )
+              )
+            case Some(round) =>
+              for {
+                pairings <- pairingRepository.listByRound(round._id.get)
+                byes <- byeRepository.listByRound(round._id.get)
+              } yield {
+                val completed = pairings.count(pairing => pairing.isOfficial && pairing.result.nonEmpty)
+                val unresolved = pairings.size - completed
+                Right(
+                  TournamentHubView(
+                    tournament = toTournamentView(tournament),
+                    currentRoundNumber = round.roundNumber,
+                    currentRoundStatus = round.status,
+                    roundProgress = Some(
+                      RoundProgressView(
+                        roundNumber = round.roundNumber,
+                        roundStatus = round.status,
+                        completedPairings = completed,
+                        unresolvedPairings = unresolved,
+                        byeCount = byes.size
+                      )
+                    )
+                  )
+                )
+              }
+          }
+      }
+    } yield result
+
+  /** API query: list authenticated user's pairings in a tournament for challenge and status tracking. */
+  def getMyPairings(tournamentId: ObjectId, lichessUserId: String): Future[Either[TournamentError, MyPairingsView]] =
+    for {
+      tournamentOpt <- tournamentRepository.findByIdOption(tournamentId)
+      result <- tournamentOpt match {
+        case None => Future.successful(Left(NotFound(s"Tournament '${tournamentId.toHexString}' not found")))
+        case Some(_) =>
+          pairingRepository.listByTournamentAndUser(tournamentId, lichessUserId).map { pairings =>
+            Right(
+              MyPairingsView(
+                tournamentId = tournamentId.toHexString,
+                lichessUserId = lichessUserId,
+                entries = pairings.map(pairing => toMyPairingEntryView(pairing, lichessUserId))
               )
             )
           }
@@ -1183,6 +1308,62 @@ final class TournamentService(
       effectiveRound = document.effectiveRound,
       createdAt = document.createdAt.toInstant.toString
     )
+
+  private def toTournamentView(document: TournamentDocument): TournamentView =
+    TournamentView(
+      id = document._id.map(_.toHexString).getOrElse(""),
+      name = document.name,
+      teamId = document.teamId,
+      timeControlInitialSeconds = document.timeControlInitialSeconds,
+      timeControlIncrementSeconds = document.timeControlIncrementSeconds,
+      status = document.status,
+      configuredMaxRounds = document.configuredMaxRounds,
+      effectiveMaxRounds = document.effectiveMaxRounds,
+      createdAt = document.createdAt.toInstant.toString,
+      updatedAt = document.updatedAt.toInstant.toString
+    )
+
+  private def toMyPairingEntryView(pairing: PairingDocument, lichessUserId: String): MyPairingEntryView = {
+    val isWhite = pairing.whiteLichessUserId == lichessUserId
+    val opponent = if (isWhite) pairing.blackLichessUserId else pairing.whiteLichessUserId
+    val challengeStatus =
+      if (pairing.challengeId.nonEmpty) "issued"
+      else if (!isWhite) "awaiting_white"
+      else "pending"
+    val lastUpdateAt = pairing.gameStartedAt
+      .orElse(pairing.challengeIssuedAt)
+      .getOrElse(pairing.createdAt)
+      .toInstant
+      .toString
+
+    MyPairingEntryView(
+      pairingId = pairing._id.map(_.toHexString).getOrElse(""),
+      roundNumber = pairing.roundNumber,
+      opponentLichessUserId = opponent,
+      color = if (isWhite) "white" else "black",
+      challengeStatus = challengeStatus,
+      gameId = Option(pairing.gameId).filter(_.nonEmpty),
+      result = pairing.result,
+      isOfficial = pairing.isOfficial,
+      lastUpdateAt = lastUpdateAt
+    )
+  }
+
+  private def toPublicTournamentCard(document: TournamentDocument): Future[PublicTournamentCardView] = {
+    val tournamentId = document._id.getOrElse(new ObjectId())
+    roundRepository.latestRoundNumberForTournament(tournamentId).map { latestRound =>
+      PublicTournamentCardView(
+        id = tournamentId.toHexString,
+        name = document.name,
+        status = document.status,
+        configuredMaxRounds = document.configuredMaxRounds,
+        effectiveMaxRounds = document.effectiveMaxRounds,
+        currentRoundNumber = latestRound.getOrElse(0),
+        createdAt = document.createdAt.toInstant.toString,
+        updatedAt = document.updatedAt.toInstant.toString
+      )
+    }
+  }
 
   private def buildPairings(
       players: Seq[String],

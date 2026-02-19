@@ -8,6 +8,9 @@ import java.util.Date
 final case class TournamentDocument(
     _id: Option[ObjectId] = None,
     name: String,
+    teamId: String,
+    timeControlInitialSeconds: Int,
+    timeControlIncrementSeconds: Int,
     status: String,
     configuredMaxRounds: Int,
     effectiveMaxRounds: Int,

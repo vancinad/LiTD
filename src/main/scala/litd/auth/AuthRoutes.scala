@@ -4,8 +4,12 @@ import akka.http.scaladsl.model.StatusCodes
 import akka.http.scaladsl.model.headers.HttpCookie
 import akka.http.scaladsl.server.Directives._
 import akka.http.scaladsl.server.Route
+import io.circe.Encoder
+import io.circe.generic.semiauto.deriveEncoder
 import io.circe.syntax.EncoderOps
 
+import java.net.URLEncoder
+import java.nio.charset.StandardCharsets
 import scala.concurrent.ExecutionContext
 import scala.util.{Failure, Success}
 
@@ -13,6 +17,12 @@ final class AuthRoutes(
     config: AuthConfig,
     authService: AuthService
 )(implicit ec: ExecutionContext) {
+  private implicit val lichessTeamViewEncoder: Encoder[LichessTeamView] = deriveEncoder[LichessTeamView]
+  private def redirectToLandingWithError(message: String): Route =
+    redirect(
+      s"/?authError=${URLEncoder.encode(message, StandardCharsets.UTF_8.name())}",
+      StatusCodes.Found
+    )
 
   /** API endpoint: GET /auth/lichess/start redirects user to Lichess OAuth authorization page. */
   private val startRoute: Route =
@@ -30,9 +40,7 @@ final class AuthRoutes(
           errorOpt match {
             case Some(errorValue) =>
               val details = errorDescOpt.filter(_.trim.nonEmpty).getOrElse("No details provided")
-              complete(
-                StatusCodes.BadRequest -> Map("error" -> s"Lichess OAuth error: $errorValue ($details)").asJson.noSpaces
-              )
+              redirectToLandingWithError(s"Lichess OAuth error: $errorValue ($details)")
             case None =>
               (codeOpt, stateOpt) match {
                 case (Some(code), Some(state)) =>
@@ -48,28 +56,22 @@ final class AuthRoutes(
                           path = Some("/")
                         )
                       ) {
-                        complete(
-                          StatusCodes.OK -> Map(
-                            "status" -> "authenticated",
-                            "lichessUserId" -> result.lichessUserId,
-                            "sessionExpiresAt" -> result.expiresAt.map(_.toString).getOrElse("unknown")
-                          ).asJson.noSpaces
-                        )
+                        redirect("/", StatusCodes.Found)
                       }
                     case Success(Left(error)) =>
-                      complete(error.status -> Map("error" -> error.message).asJson.noSpaces)
+                      redirectToLandingWithError(error.message)
                     case Failure(ex) =>
-                      complete(StatusCodes.BadGateway -> Map("error" -> ex.getMessage).asJson.noSpaces)
+                      redirectToLandingWithError(ex.getMessage)
                   }
                 case _ =>
-                  complete(StatusCodes.BadRequest -> Map("error" -> "Missing OAuth callback parameters").asJson.noSpaces)
+                  redirectToLandingWithError("Missing OAuth callback parameters")
               }
           }
         }
       }
     }
 
-  /** API endpoint: GET /auth/me returns authenticated user when session cookie is valid and team-gated. */
+  /** API endpoint: GET /auth/me returns authenticated user when session cookie is valid. */
   private val meRoute: Route =
     path("auth" / "me") {
       get {
@@ -89,5 +91,69 @@ final class AuthRoutes(
       }
     }
 
-  val routes: Route = startRoute ~ callbackRoute ~ meRoute
+  /** API endpoint: GET /auth/teams returns teams for the authenticated Lichess user. */
+  private val teamsRoute: Route =
+    path("auth" / "teams") {
+      get {
+        optionalCookie(config.session.cookieName) {
+          case None =>
+            complete(StatusCodes.Unauthorized -> Map("error" -> "Missing auth session cookie").asJson.noSpaces)
+          case Some(cookie) =>
+            onComplete(authService.authenticate(cookie.value)) {
+              case Success(Right(user)) =>
+                onComplete(authService.listTeams(user)) {
+                  case Success(Right(teams)) => complete(StatusCodes.OK -> Map("teams" -> teams).asJson.noSpaces)
+                  case Success(Left(error))  => complete(error.status -> Map("error" -> error.message).asJson.noSpaces)
+                  case Failure(ex) => complete(StatusCodes.BadGateway -> Map("error" -> ex.getMessage).asJson.noSpaces)
+                }
+              case Success(Left(error)) =>
+                complete(error.status -> Map("error" -> error.message).asJson.noSpaces)
+              case Failure(ex) =>
+                complete(StatusCodes.BadGateway -> Map("error" -> ex.getMessage).asJson.noSpaces)
+            }
+        }
+      }
+    }
+
+  /** API endpoint: POST /auth/logout revokes current session token and clears auth cookie. */
+  private val logoutRoute: Route =
+    path("auth" / "logout") {
+      post {
+        optionalCookie(config.session.cookieName) {
+          case None =>
+            setCookie(
+              HttpCookie(
+                name = config.session.cookieName,
+                value = "deleted",
+                httpOnly = true,
+                secure = config.session.secureCookie,
+                maxAge = Some(0L),
+                path = Some("/")
+              )
+            ) {
+              complete(StatusCodes.OK -> Map("status" -> "logged_out").asJson.noSpaces)
+            }
+          case Some(cookie) =>
+            onComplete(authService.logout(cookie.value)) {
+              case Success(_) =>
+                setCookie(
+                  HttpCookie(
+                    name = config.session.cookieName,
+                    value = "deleted",
+                    httpOnly = true,
+                    secure = config.session.secureCookie,
+                    maxAge = Some(0L),
+                    path = Some("/")
+                  )
+                ) {
+                  complete(StatusCodes.OK -> Map("status" -> "logged_out").asJson.noSpaces)
+                }
+              case Failure(ex) =>
+                complete(StatusCodes.BadGateway -> Map("error" -> ex.getMessage).asJson.noSpaces)
+            }
+        }
+      }
+    }
+
+  val routes: Route = startRoute ~ callbackRoute ~ meRoute ~ teamsRoute ~ logoutRoute
 }

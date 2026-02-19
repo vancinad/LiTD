@@ -75,7 +75,6 @@ litd {
       clientId = "your-lichess-oauth-client-id"
       clientSecret = "your-lichess-oauth-client-secret"
       redirectUri = "http://localhost:8080/auth/lichess/callback"
-      teamId = "your-lichess-team-id"
       scope = "preference:read team:read challenge:write"
       requestTimeoutMillis = 5000
       retryCount = 3
@@ -116,12 +115,11 @@ The following env vars are required unless you provide equivalent values in an e
   - MongoDB database name.
   - Example: `litd_dev`
 
-The following are strongly required for real OAuth/team-gated auth usage:
+The following are strongly required for real OAuth usage:
 
 - `LITD_LICHESS_CLIENT_ID`
 - `LITD_LICHESS_CLIENT_SECRET`
 - `LITD_LICHESS_REDIRECT_URI`
-- `LITD_TEAM_ID`
 
 Security-sensitive auth encryption key:
 
@@ -142,7 +140,6 @@ export LITD_AUTH_ENCRYPTION_KEY_BASE64='replace-with-32-byte-base64'
 export LITD_LICHESS_CLIENT_ID='replace-with-client-id'
 export LITD_LICHESS_CLIENT_SECRET='replace-with-client-secret'
 export LITD_LICHESS_REDIRECT_URI='http://localhost:8080/auth/lichess/callback'
-export LITD_TEAM_ID='replace-with-team-id'
 ```
 
 ## 5) Run LiTD

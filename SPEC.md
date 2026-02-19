@@ -42,6 +42,9 @@ Key changes focus on:
 {
   _id: ObjectId,
   name: string,
+  teamId: string,
+  timeControlInitialSeconds: number,
+  timeControlIncrementSeconds: number,
   status: "draft" | "active" | "completed",
   configuredMaxRounds: number,
   effectiveMaxRounds: number,
@@ -61,6 +64,7 @@ configuredMaxRounds <= 15  (unless adminOverride = true)
 
 Indexes:
 - `{ status: 1 }`
+- `{ teamId: 1 }`
 
 ---
 
@@ -281,4 +285,3 @@ The introduction of `playerIds` and `PlayerTournamentState` ensures all critical
 - Shifted standings and Swiss constraints to incremental updates
 
 This revised model is safe, performant, and maintainable for tournaments up to and beyond 500 players.
-

@@ -6,12 +6,18 @@ import scala.math.{ceil, log}
 
 final case class CreateTournamentRequest(
     name: String,
-    configuredMaxRounds: Int
+    configuredMaxRounds: Int,
+    teamId: String,
+    timeControlInitialSeconds: Int,
+    timeControlIncrementSeconds: Int
 )
 
 final case class TournamentView(
     id: String,
     name: String,
+    teamId: String,
+    timeControlInitialSeconds: Int,
+    timeControlIncrementSeconds: Int,
     status: String,
     configuredMaxRounds: Int,
     effectiveMaxRounds: Int,
@@ -138,6 +144,54 @@ final case class CrosstableView(
     rows: Seq[CrosstableRowView]
 )
 
+final case class PublicTournamentCardView(
+    id: String,
+    name: String,
+    status: String,
+    configuredMaxRounds: Int,
+    effectiveMaxRounds: Int,
+    currentRoundNumber: Int,
+    createdAt: String,
+    updatedAt: String
+)
+
+final case class PublicTournamentListView(
+    tournaments: Seq[PublicTournamentCardView]
+)
+
+final case class RoundProgressView(
+    roundNumber: Int,
+    roundStatus: String,
+    completedPairings: Int,
+    unresolvedPairings: Int,
+    byeCount: Int
+)
+
+final case class TournamentHubView(
+    tournament: TournamentView,
+    currentRoundNumber: Int,
+    currentRoundStatus: String,
+    roundProgress: Option[RoundProgressView]
+)
+
+final case class MyPairingEntryView(
+    pairingId: String,
+    roundNumber: Int,
+    opponentLichessUserId: String,
+    color: String,
+    challengeStatus: String,
+    gameId: Option[String],
+    result: Option[String],
+    isOfficial: Boolean,
+    lastUpdateAt: String
+)
+
+final case class MyPairingsView(
+    tournamentId: String,
+    lichessUserId: String,
+    entries: Seq[MyPairingEntryView]
+)
+
 sealed trait TournamentError extends Product with Serializable {
   def status: akka.http.scaladsl.model.StatusCode
   def message: String
@@ -170,8 +224,18 @@ object TournamentRules {
   val ResultDraw: String = "draw"
   val ResultForfeit: String = "forfeit"
   val AllowedResultValues: Set[String] = Set(ResultWhite, ResultBlack, ResultDraw, ResultForfeit)
+  val MinTimeControlInitialSeconds: Int = 10
+  val MaxTimeControlInitialSeconds: Int = 10800
+  val MinTimeControlIncrementSeconds: Int = 0
+  val MaxTimeControlIncrementSeconds: Int = 180
 
   def isValidConfiguredMaxRounds(value: Int): Boolean = value > 0 && value <= MaxConfiguredRounds
+
+  def isValidTimeControlInitialSeconds(value: Int): Boolean =
+    value >= MinTimeControlInitialSeconds && value <= MaxTimeControlInitialSeconds
+
+  def isValidTimeControlIncrementSeconds(value: Int): Boolean =
+    value >= MinTimeControlIncrementSeconds && value <= MaxTimeControlIncrementSeconds
 
   def isValidResultValue(value: String): Boolean = AllowedResultValues.contains(value)
 

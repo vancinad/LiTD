@@ -10,7 +10,6 @@ final case class LichessAuthConfig(
     clientSecret: String,
     redirectUri: String,
     scope: String,
-    teamId: String,
     requestTimeoutMillis: Int,
     retryCount: Int
 )
@@ -44,6 +43,11 @@ final case class LichessChallengeResponse(
 final case class AuthenticatedUser(
     lichessUserId: String,
     accessToken: String
+)
+
+final case class LichessTeamView(
+    id: String,
+    name: String
 )
 
 sealed trait AuthError extends Product with Serializable {

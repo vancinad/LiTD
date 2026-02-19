@@ -44,6 +44,14 @@ final class TournamentRoutes(
   private implicit val crosstableByeViewEncoder: Encoder[CrosstableByeView] = deriveEncoder[CrosstableByeView]
   private implicit val crosstableRowViewEncoder: Encoder[CrosstableRowView] = deriveEncoder[CrosstableRowView]
   private implicit val crosstableViewEncoder: Encoder[CrosstableView] = deriveEncoder[CrosstableView]
+  private implicit val publicTournamentCardViewEncoder: Encoder[PublicTournamentCardView] =
+    deriveEncoder[PublicTournamentCardView]
+  private implicit val publicTournamentListViewEncoder: Encoder[PublicTournamentListView] =
+    deriveEncoder[PublicTournamentListView]
+  private implicit val roundProgressViewEncoder: Encoder[RoundProgressView] = deriveEncoder[RoundProgressView]
+  private implicit val tournamentHubViewEncoder: Encoder[TournamentHubView] = deriveEncoder[TournamentHubView]
+  private implicit val myPairingEntryViewEncoder: Encoder[MyPairingEntryView] = deriveEncoder[MyPairingEntryView]
+  private implicit val myPairingsViewEncoder: Encoder[MyPairingsView] = deriveEncoder[MyPairingsView]
 
   private def withAuthenticatedUser(inner: AuthenticatedUser => Route): Route =
     optionalCookie(authConfig.session.cookieName) {
@@ -74,19 +82,26 @@ final class TournamentRoutes(
   private def decodeBody[T: Decoder](rawBody: String): Either[TournamentError, T] =
     decode[T](rawBody).left.map(err => TournamentError.BadRequest(s"Invalid request body: ${err.getMessage}"))
 
-  /** API endpoint: POST /tournaments creates a tournament for authenticated team member sessions. */
+  /** API endpoint: POST /tournaments creates a tournament for authenticated users who belong to the requested teamId. */
   private val createTournamentRoute: Route =
     path("tournaments") {
       post {
-        withAuthenticatedUser { _ =>
+        withAuthenticatedUser { user =>
           entity(as[String]) { rawBody =>
             decodeBody[CreateTournamentRequest](rawBody) match {
               case Left(error) => completeDomainError(error)
               case Right(request) =>
-                onComplete(tournamentService.createTournament(request)) {
-                  case Success(Right(created)) => complete(StatusCodes.Created -> created.asJson.noSpaces)
-                  case Success(Left(error))    => completeDomainError(error)
-                  case Failure(_) => completeUnexpectedFailure(StatusCodes.InternalServerError)
+                onComplete(authService.isMemberOfTeam(user, request.teamId)) {
+                  case Success(Left(error)) => complete(error.status -> Map("error" -> error.message).asJson.noSpaces)
+                  case Success(Right(false)) =>
+                    complete(StatusCodes.Forbidden -> Map("error" -> s"User is not in team '${request.teamId}'").asJson.noSpaces)
+                  case Success(Right(true)) =>
+                    onComplete(tournamentService.createTournament(request)) {
+                      case Success(Right(created)) => complete(StatusCodes.Created -> created.asJson.noSpaces)
+                      case Success(Left(error))    => completeDomainError(error)
+                      case Failure(_) => completeUnexpectedFailure(StatusCodes.InternalServerError)
+                    }
+                  case Failure(_) => completeUnexpectedFailure(StatusCodes.BadGateway)
                 }
             }
           }
@@ -102,10 +117,27 @@ final class TournamentRoutes(
           parseTournamentId(tournamentIdRaw) match {
             case Left(error) => completeDomainError(error)
             case Right(tournamentId) =>
-              onComplete(tournamentService.registerPlayer(tournamentId, user.lichessUserId)) {
-                case Success(Right(registered)) => complete(StatusCodes.Created -> registered.asJson.noSpaces)
-                case Success(Left(error))       => completeDomainError(error)
-                case Failure(_) => completeUnexpectedFailure(StatusCodes.InternalServerError)
+              onComplete(tournamentService.getTournament(tournamentId)) {
+                case Success(Left(error)) =>
+                  completeDomainError(error)
+                case Success(Right(tournament)) =>
+                  onComplete(authService.isMemberOfTeam(user, tournament.teamId)) {
+                    case Success(Left(error)) =>
+                      complete(error.status -> Map("error" -> error.message).asJson.noSpaces)
+                    case Success(Right(false)) =>
+                      complete(
+                        StatusCodes.Forbidden -> Map("error" -> s"User is not in team '${tournament.teamId}'").asJson.noSpaces
+                      )
+                    case Success(Right(true)) =>
+                      onComplete(tournamentService.registerPlayer(tournamentId, user.lichessUserId)) {
+                        case Success(Right(registered)) => complete(StatusCodes.Created -> registered.asJson.noSpaces)
+                        case Success(Left(error))       => completeDomainError(error)
+                        case Failure(_)                 => completeUnexpectedFailure(StatusCodes.InternalServerError)
+                      }
+                    case Failure(_) => completeUnexpectedFailure(StatusCodes.BadGateway)
+                  }
+                case Failure(_) =>
+                  completeUnexpectedFailure(StatusCodes.InternalServerError)
               }
           }
         }
@@ -279,6 +311,84 @@ final class TournamentRoutes(
     }
 
   /** API endpoint: GET /public/tournaments/{tournamentId}/standings returns computed standings read model. */
+  private val publicTournamentListRoute: Route =
+    path("public" / "tournaments") {
+      get {
+        onComplete(tournamentService.listPublicTournaments()) {
+          case Success(result) => complete(StatusCodes.OK -> result.asJson.noSpaces)
+          case Failure(_) => completeUnexpectedFailure(StatusCodes.InternalServerError)
+        }
+      }
+    }
+
+  /** API endpoint: GET /public/tournaments/{tournamentId}/hub returns tournament hub summary read model. */
+  private val tournamentHubRoute: Route =
+    path("public" / "tournaments" / Segment / "hub") { tournamentIdRaw =>
+      get {
+        parseTournamentId(tournamentIdRaw) match {
+          case Left(error) => completeDomainError(error)
+          case Right(tournamentId) =>
+            onComplete(tournamentService.getTournamentHub(tournamentId)) {
+              case Success(Right(result)) => complete(StatusCodes.OK -> result.asJson.noSpaces)
+              case Success(Left(error))   => completeDomainError(error)
+              case Failure(_) => completeUnexpectedFailure(StatusCodes.InternalServerError)
+            }
+        }
+      }
+    }
+
+  /** API endpoint: GET /tournaments/mine returns authenticated player's tournaments for landing personalization. */
+  private val myTournamentsRoute: Route =
+    path("tournaments" / "mine") {
+      get {
+        withAuthenticatedUser { user =>
+          onComplete(tournamentService.listMyTournaments(user.lichessUserId)) {
+            case Success(result) => complete(StatusCodes.OK -> result.asJson.noSpaces)
+            case Failure(_) => completeUnexpectedFailure(StatusCodes.InternalServerError)
+          }
+        }
+      }
+    }
+
+  /** API endpoint: GET /tournaments/visible returns tournaments in teams the authenticated user belongs to. */
+  private val visibleTournamentsRoute: Route =
+    path("tournaments" / "visible") {
+      get {
+        withAuthenticatedUser { user =>
+          onComplete(authService.listTeams(user)) {
+            case Success(Left(error)) =>
+              complete(error.status -> Map("error" -> error.message).asJson.noSpaces)
+            case Success(Right(teams)) =>
+              val teamIds = teams.map(_.id)
+              onComplete(tournamentService.listTournamentsByTeams(teamIds)) {
+                case Success(result) => complete(StatusCodes.OK -> result.asJson.noSpaces)
+                case Failure(_)      => completeUnexpectedFailure(StatusCodes.InternalServerError)
+              }
+            case Failure(_) => completeUnexpectedFailure(StatusCodes.BadGateway)
+          }
+        }
+      }
+    }
+
+  /** API endpoint: GET /tournaments/{tournamentId}/pairings/me returns authenticated player's pairings for challenge actions. */
+  private val myPairingsRoute: Route =
+    path("tournaments" / Segment / "pairings" / "me") { tournamentIdRaw =>
+      get {
+        withAuthenticatedUser { user =>
+          parseTournamentId(tournamentIdRaw) match {
+            case Left(error) => completeDomainError(error)
+            case Right(tournamentId) =>
+              onComplete(tournamentService.getMyPairings(tournamentId, user.lichessUserId)) {
+                case Success(Right(result)) => complete(StatusCodes.OK -> result.asJson.noSpaces)
+                case Success(Left(error))   => completeDomainError(error)
+                case Failure(_) => completeUnexpectedFailure(StatusCodes.InternalServerError)
+              }
+          }
+        }
+      }
+    }
+
+  /** API endpoint: GET /public/tournaments/{tournamentId}/standings returns computed standings read model. */
   private val standingsRoute: Route =
     path("public" / "tournaments" / Segment / "standings") { tournamentIdRaw =>
       get {
@@ -312,7 +422,7 @@ final class TournamentRoutes(
 
   val routes: Route =
     createTournamentRoute ~
-      registerRoute ~
+    registerRoute ~
       withdrawRoute ~
       reactivateRoute ~
       generateRoundRoute ~
@@ -321,6 +431,11 @@ final class TournamentRoutes(
       refreshRoundResultsRoute ~
       endRoundRoute ~
       overridePairingResultRoute ~
+      publicTournamentListRoute ~
+      tournamentHubRoute ~
+      myTournamentsRoute ~
+      visibleTournamentsRoute ~
+      myPairingsRoute ~
       standingsRoute ~
       crosstableRoute
 }

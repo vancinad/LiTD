@@ -40,3 +40,19 @@ References:
 ## UI Design
 
 See [UI_DESIGN.md](UI_DESIGN.md) for the proposed first-pass user interface architecture and screen flows.
+
+## MVP UI (Phase 1)
+
+The service now serves a lightweight web UI directly from Akka HTTP:
+
+- Landing: `GET /`
+- Tournament hub: `GET /tournaments/{tournamentId}`
+- Standings tab route: `GET /tournaments/{tournamentId}/standings`
+- Crosstable tab route: `GET /tournaments/{tournamentId}/crosstable`
+
+Supporting read APIs used by the UI:
+
+- `GET /public/tournaments`
+- `GET /public/tournaments/{tournamentId}/hub`
+- `GET /tournaments/mine` (authenticated)
+- `GET /tournaments/{tournamentId}/pairings/me` (authenticated)

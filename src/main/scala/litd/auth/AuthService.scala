@@ -1,6 +1,6 @@
 package litd.auth
 
-import litd.auth.AuthError.{BadRequest, External, Forbidden, Unauthorized}
+import litd.auth.AuthError.{BadRequest, External, Unauthorized}
 import litd.domain.{OAuthTokenDocument, TeamMembershipCacheDocument}
 import litd.mongo.repository.{OAuthTokenRepository, TeamMembershipCacheRepository}
 
@@ -36,12 +36,7 @@ final class AuthService(
         for {
           token <- lichessApiClient.exchangeCodeForToken(code, codeVerifier)
           userId <- lichessApiClient.currentUserId(token.accessToken)
-          membership <- checkMembership(userId, token.accessToken)
-          result <- if (!membership) {
-            Future.successful(Left(Forbidden(s"User '$userId' is not in required team '${config.lichess.teamId}'")))
-          } else {
-            persistToken(userId, token).map(Right(_))
-          }
+          result <- persistToken(userId, token).map(Right(_))
         } yield result
     }
   }
@@ -54,10 +49,33 @@ final class AuthService(
         decodeToken(tokenDoc).flatMap {
           case Left(err) => Future.successful(Left(err))
           case Right(accessToken) =>
-            checkMembership(tokenDoc.lichessUserId, accessToken).map {
-              case true  => Right(AuthenticatedUser(tokenDoc.lichessUserId, accessToken))
-              case false => Left(Forbidden(s"User '${tokenDoc.lichessUserId}' is not in required team"))
-            }
+            Future.successful(Right(AuthenticatedUser(tokenDoc.lichessUserId, accessToken)))
+        }
+    }
+  }
+
+  def logout(sessionToken: String): Future[Unit] = {
+    val sessionTokenHash = cryptoService.sha256Hex(sessionToken)
+    oauthTokenRepository.deleteBySessionTokenHash(sessionTokenHash).map(_ => ())
+  }
+
+  def listTeams(user: AuthenticatedUser): Future[Either[AuthError, Seq[LichessTeamView]]] =
+    lichessApiClient
+      .listTeams(user.lichessUserId, user.accessToken)
+      .map(teams => Right(teams.sortBy(_.name.toLowerCase)))
+      .recover { case ex =>
+        Left(External(s"Failed to load Lichess teams: ${ex.getMessage}"))
+      }
+
+  def isMemberOfTeam(user: AuthenticatedUser, teamId: String): Future[Either[AuthError, Boolean]] = {
+    val normalizedTeamId = teamId.trim
+    if (normalizedTeamId.isEmpty) {
+      Future.successful(Left(BadRequest("teamId must not be empty")))
+    } else {
+      checkMembership(user.lichessUserId, normalizedTeamId, user.accessToken)
+        .map(isMember => Right(isMember))
+        .recover { case ex =>
+          Left(External(s"Failed to verify team membership: ${ex.getMessage}"))
         }
     }
   }
@@ -93,17 +111,17 @@ final class AuthService(
       .map(_ => OAuthCallbackResult(sessionToken, userId, expiresAt))
   }
 
-  private def checkMembership(userId: String, accessToken: String): Future[Boolean] = {
+  private def checkMembership(userId: String, teamId: String, accessToken: String): Future[Boolean] = {
     val now = Instant.now()
-    teamMembershipCacheRepository.findByTeamAndUser(config.lichess.teamId, userId).flatMap {
+    teamMembershipCacheRepository.findByTeamAndUser(teamId, userId).flatMap {
       case Some(cached) if cached.expiresAt.toInstant.isAfter(now) => Future.successful(cached.isMember)
       case _ =>
         lichessApiClient
-          .isTeamMember(userId, accessToken)
+          .isTeamMember(userId, teamId, accessToken)
           .flatMap { isMember =>
             val expiresAt = now.plusSeconds(config.membershipCacheTtlSeconds.toLong)
             val cacheDoc = TeamMembershipCacheDocument(
-              teamId = config.lichess.teamId,
+              teamId = teamId,
               lichessUserId = userId,
               isMember = isMember,
               expiresAt = Date.from(expiresAt),

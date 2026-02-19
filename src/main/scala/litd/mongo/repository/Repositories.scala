@@ -27,6 +27,30 @@ final class TournamentRepository(database: MongoDatabase)
       .replaceOne(session, equal("_id", id), document, ReplaceOptions().upsert(false))
       .toFuture()
       .map(_.getMatchedCount > 0)
+
+  def listByStatuses(statuses: Seq[String], limit: Int = 50)(implicit ec: ExecutionContext): Future[Seq[TournamentDocument]] =
+    collection
+      .find(org.mongodb.scala.model.Filters.in("status", statuses: _*))
+      .sort(Sorts.descending("updatedAt"))
+      .limit(limit)
+      .toFuture()
+
+  def listByTeamIdsAndStatuses(teamIds: Seq[String], statuses: Seq[String], limit: Int = 50)(implicit
+      ec: ExecutionContext
+  ): Future[Seq[TournamentDocument]] =
+    if (teamIds.isEmpty) Future.successful(Seq.empty)
+    else {
+      collection
+        .find(
+          and(
+            org.mongodb.scala.model.Filters.in("teamId", teamIds: _*),
+            org.mongodb.scala.model.Filters.in("status", statuses: _*)
+          )
+        )
+        .sort(Sorts.descending("updatedAt"))
+        .limit(limit)
+        .toFuture()
+    }
 }
 
 final class RegistrationRepository(database: MongoDatabase)
@@ -89,6 +113,13 @@ final class RegistrationRepository(database: MongoDatabase)
   ): Future[Seq[RegistrationDocument]] =
     collection
       .find(session, equal("tournamentId", tournamentId))
+      .toFuture()
+
+  def listByUser(lichessUserId: String, limit: Int = 50)(implicit ec: ExecutionContext): Future[Seq[RegistrationDocument]] =
+    collection
+      .find(equal("lichessUserId", lichessUserId))
+      .sort(Sorts.descending("createdAt"))
+      .limit(limit)
       .toFuture()
 }
 
@@ -169,6 +200,19 @@ final class PairingRepository(database: MongoDatabase)
   ): Future[Seq[PairingDocument]] =
     collection
       .find(session, equal("tournamentId", tournamentId))
+      .toFuture()
+
+  def listByTournamentAndUser(tournamentId: org.bson.types.ObjectId, lichessUserId: String)(implicit
+      ec: ExecutionContext
+  ): Future[Seq[PairingDocument]] =
+    collection
+      .find(
+        and(
+          equal("tournamentId", tournamentId),
+          org.mongodb.scala.model.Filters.in("playerIds", lichessUserId)
+        )
+      )
+      .sort(Sorts.ascending("roundNumber"))
       .toFuture()
 
   def insertMany(session: ClientSession, documents: Seq[PairingDocument])(implicit ec: ExecutionContext): Future[Unit] =
@@ -337,6 +381,13 @@ final class ByeRepository(database: MongoDatabase)
       .find(session, equal("roundId", roundId))
       .toFuture()
 
+  def listByRound(roundId: org.bson.types.ObjectId)(implicit
+      ec: ExecutionContext
+  ): Future[Seq[ByeDocument]] =
+    collection
+      .find(equal("roundId", roundId))
+      .toFuture()
+
   def insertMany(session: ClientSession, documents: Seq[ByeDocument])(implicit ec: ExecutionContext): Future[Unit] =
     if (documents.isEmpty) Future.unit
     else collection.insertMany(session, documents).toFuture().map(_ => ())
@@ -412,6 +463,12 @@ final class OAuthTokenRepository(database: MongoDatabase)
       )
       .toFuture()
       .map(_ => ())
+
+  def deleteBySessionTokenHash(sessionTokenHash: String)(implicit ec: ExecutionContext): Future[Boolean] =
+    collection
+      .deleteOne(equal("sessionTokenHash", sessionTokenHash))
+      .toFuture()
+      .map(_.getDeletedCount > 0)
 }
 
 final class TeamMembershipCacheRepository(database: MongoDatabase)

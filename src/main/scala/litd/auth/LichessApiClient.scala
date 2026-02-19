@@ -73,25 +73,45 @@ final class LichessApiClient(
     }
   }
 
-  def isTeamMember(userId: String, accessToken: String): Future[Boolean] = {
+  def isTeamMember(userId: String, teamId: String, accessToken: String): Future[Boolean] = {
+    listTeams(userId, accessToken).map { teams =>
+      teams.exists(_.id == teamId)
+    }
+  }
+
+  def listTeams(userId: String, accessToken: String): Future[Seq[LichessTeamView]] = {
     val request = HttpRequest(
       method = HttpMethods.GET,
       uri = s"${config.baseUrl}/api/team/of/${urlEncode(userId)}",
       headers = List(headers.RawHeader("Authorization", s"Bearer $accessToken"))
     )
     withRetries(request).map { json =>
-      json.asArray.exists(_.exists { team =>
-        team.hcursor.get[String]("id").contains(config.teamId)
-      })
+      json.asArray
+        .getOrElse(Vector.empty)
+        .flatMap { team =>
+          val cursor = team.hcursor
+          cursor.get[String]("id").toOption.map { id =>
+            val name = cursor.get[String]("name").getOrElse(id)
+            LichessTeamView(id = id, name = name)
+          }
+        }
     }
   }
 
-  def issueChallenge(opponentUserId: String, accessToken: String): Future[LichessChallengeResponse] = {
+  def issueChallenge(
+      opponentUserId: String,
+      accessToken: String,
+      initialSeconds: Int,
+      incrementSeconds: Int
+  ): Future[LichessChallengeResponse] = {
     val request = HttpRequest(
       method = HttpMethods.POST,
       uri = s"${config.baseUrl}/api/challenge/${urlEncode(opponentUserId)}",
       headers = List(headers.RawHeader("Authorization", s"Bearer $accessToken")),
-      entity = FormData(Map.empty[String, String]).toEntity
+      entity = FormData(
+        "clock.limit" -> initialSeconds.toString,
+        "clock.increment" -> incrementSeconds.toString
+      ).toEntity
     )
     withRetries(request).flatMap { json =>
       val cursor = json.hcursor

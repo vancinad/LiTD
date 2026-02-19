@@ -33,4 +33,14 @@ final class TournamentRulesSpec extends AnyFunSuite {
     assert(!RegistrationStatus.canTransition(RegistrationStatus.Disqualified, RegistrationStatus.Registered))
     assert(!RegistrationStatus.canTransition(RegistrationStatus.Registered, RegistrationStatus.Registered))
   }
+
+  test("time control validation bounds") {
+    assert(!TournamentRules.isValidTimeControlInitialSeconds(0))
+    assert(TournamentRules.isValidTimeControlInitialSeconds(180))
+    assert(!TournamentRules.isValidTimeControlInitialSeconds(20000))
+
+    assert(!TournamentRules.isValidTimeControlIncrementSeconds(-1))
+    assert(TournamentRules.isValidTimeControlIncrementSeconds(2))
+    assert(!TournamentRules.isValidTimeControlIncrementSeconds(400))
+  }
 }

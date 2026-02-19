@@ -10,7 +10,12 @@ final case class IssuedChallenge(
 )
 
 trait ChallengeGateway {
-  def issueChallenge(opponentLichessUserId: String, accessToken: String): Future[Either[String, IssuedChallenge]]
+  def issueChallenge(
+      opponentLichessUserId: String,
+      accessToken: String,
+      initialSeconds: Int,
+      incrementSeconds: Int
+  ): Future[Either[String, IssuedChallenge]]
   def lookupGameId(challengeId: String, accessToken: String): Future[Either[String, Option[String]]]
   def lookupGameResult(gameId: String, accessToken: String): Future[Either[String, Option[String]]]
 }
@@ -21,10 +26,12 @@ final class LichessChallengeGateway(
     extends ChallengeGateway {
   override def issueChallenge(
       opponentLichessUserId: String,
-      accessToken: String
+      accessToken: String,
+      initialSeconds: Int,
+      incrementSeconds: Int
   ): Future[Either[String, IssuedChallenge]] =
     lichessApiClient
-      .issueChallenge(opponentLichessUserId, accessToken)
+      .issueChallenge(opponentLichessUserId, accessToken, initialSeconds, incrementSeconds)
       .map(response => Right(IssuedChallenge(response.challengeId, response.status)))
       .recover { case ex => Left(ex.getMessage) }
 
@@ -43,7 +50,12 @@ final class LichessChallengeGateway(
 
 object ChallengeGateway {
   val Disabled: ChallengeGateway = new ChallengeGateway {
-    override def issueChallenge(opponentLichessUserId: String, accessToken: String): Future[Either[String, IssuedChallenge]] =
+    override def issueChallenge(
+        opponentLichessUserId: String,
+        accessToken: String,
+        initialSeconds: Int,
+        incrementSeconds: Int
+    ): Future[Either[String, IssuedChallenge]] =
       Future.successful(Left("Challenge gateway is not configured"))
 
     override def lookupGameId(challengeId: String, accessToken: String): Future[Either[String, Option[String]]] =

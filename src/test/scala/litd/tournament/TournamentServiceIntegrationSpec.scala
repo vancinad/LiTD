@@ -61,7 +61,7 @@ final class TournamentServiceIntegrationSpec
     requireDocker()
     val (service, _, _, _) = freshServiceContext()
 
-    val createdTournament = awaitDomain(service.createTournament(CreateTournamentRequest("No rounds", 5)))
+    val createdTournament = awaitDomain(service.createTournament(CreateTournamentRequest("No rounds", 5, "team-one", 180, 2)))
     val tournamentId = new ObjectId(createdTournament.id)
 
     val registration = awaitDomain(service.registerPlayer(tournamentId, "player-a"))
@@ -73,7 +73,7 @@ final class TournamentServiceIntegrationSpec
     requireDocker()
     val (service, repositories, _, _) = freshServiceContext()
 
-    val createdTournament = awaitDomain(service.createTournament(CreateTournamentRequest("Late registration", 7)))
+    val createdTournament = awaitDomain(service.createTournament(CreateTournamentRequest("Late registration", 7, "team-one", 180, 2)))
     val tournamentId = new ObjectId(createdTournament.id)
 
     awaitFuture(
@@ -107,7 +107,7 @@ final class TournamentServiceIntegrationSpec
     requireDocker()
     val (service, repositories, _, _) = freshServiceContext()
 
-    val createdTournament = awaitDomain(service.createTournament(CreateTournamentRequest("Status transitions", 6)))
+    val createdTournament = awaitDomain(service.createTournament(CreateTournamentRequest("Status transitions", 6, "team-one", 180, 2)))
     val tournamentId = new ObjectId(createdTournament.id)
 
     awaitFuture(
@@ -150,7 +150,7 @@ final class TournamentServiceIntegrationSpec
   test("generate first round computes effectiveMaxRounds and creates pairings plus odd bye") {
     requireDocker()
     val (service, _, _, _) = freshServiceContext()
-    val createdTournament = awaitDomain(service.createTournament(CreateTournamentRequest("Round gen", 6)))
+    val createdTournament = awaitDomain(service.createTournament(CreateTournamentRequest("Round gen", 6, "team-one", 180, 2)))
     val tournamentId = new ObjectId(createdTournament.id)
 
     awaitDomain(service.registerPlayer(tournamentId, "alpha"))
@@ -167,7 +167,7 @@ final class TournamentServiceIntegrationSpec
   test("td-granted byes are stored during generation and explicit endpoint validates conflicts") {
     requireDocker()
     val (service, _, _, _) = freshServiceContext()
-    val createdTournament = awaitDomain(service.createTournament(CreateTournamentRequest("TD byes", 6)))
+    val createdTournament = awaitDomain(service.createTournament(CreateTournamentRequest("TD byes", 6, "team-one", 180, 2)))
     val tournamentId = new ObjectId(createdTournament.id)
 
     awaitDomain(service.registerPlayer(tournamentId, "p1"))
@@ -200,7 +200,7 @@ final class TournamentServiceIntegrationSpec
       lookupResponse = Right(None)
     )
     val (service, repositories, _, _) = freshServiceContext(challengeGateway = gateway)
-    val createdTournament = awaitDomain(service.createTournament(CreateTournamentRequest("Challenge issuance", 4)))
+    val createdTournament = awaitDomain(service.createTournament(CreateTournamentRequest("Challenge issuance", 4, "team-one", 180, 2)))
     val tournamentId = new ObjectId(createdTournament.id)
 
     awaitDomain(service.registerPlayer(tournamentId, "white-player"))
@@ -228,7 +228,7 @@ final class TournamentServiceIntegrationSpec
       lookupResponse = Right(None)
     )
     val (service, repositories, _, _) = freshServiceContext(challengeGateway = gateway)
-    val createdTournament = awaitDomain(service.createTournament(CreateTournamentRequest("Challenge idempotency", 4)))
+    val createdTournament = awaitDomain(service.createTournament(CreateTournamentRequest("Challenge idempotency", 4, "team-one", 180, 2)))
     val tournamentId = new ObjectId(createdTournament.id)
 
     awaitDomain(service.registerPlayer(tournamentId, "white-player"))
@@ -265,7 +265,7 @@ final class TournamentServiceIntegrationSpec
         lookupResponse = Right(Some("game-999"))
       )
       val (service, repositories, cryptoService, _) = freshServiceContext(challengeGateway = gateway)
-      val createdTournament = awaitDomain(service.createTournament(CreateTournamentRequest("Challenge worker", 4)))
+      val createdTournament = awaitDomain(service.createTournament(CreateTournamentRequest("Challenge worker", 4, "team-one", 180, 2)))
       val tournamentId = new ObjectId(createdTournament.id)
 
       awaitDomain(service.registerPlayer(tournamentId, "white-player"))
@@ -326,7 +326,7 @@ final class TournamentServiceIntegrationSpec
       gameResultResponse = Right(Some(TournamentRules.ResultDraw))
     )
     val (service, repositories, _, _) = freshServiceContext(challengeGateway = gateway)
-    val createdTournament = awaitDomain(service.createTournament(CreateTournamentRequest("Refresh results", 4)))
+    val createdTournament = awaitDomain(service.createTournament(CreateTournamentRequest("Refresh results", 4, "team-one", 180, 2)))
     val tournamentId = new ObjectId(createdTournament.id)
 
     awaitDomain(service.registerPlayer(tournamentId, "white-player"))
@@ -355,7 +355,7 @@ final class TournamentServiceIntegrationSpec
   test("end round applies double-forfeit and completes round") {
     requireDocker()
     val (service, repositories, _, _) = freshServiceContext()
-    val createdTournament = awaitDomain(service.createTournament(CreateTournamentRequest("End round", 4)))
+    val createdTournament = awaitDomain(service.createTournament(CreateTournamentRequest("End round", 4, "team-one", 180, 2)))
     val tournamentId = new ObjectId(createdTournament.id)
 
     awaitDomain(service.registerPlayer(tournamentId, "white-player"))
@@ -380,7 +380,7 @@ final class TournamentServiceIntegrationSpec
   test("override result stores override history and recomputes player state") {
     requireDocker()
     val (service, repositories, _, _) = freshServiceContext()
-    val createdTournament = awaitDomain(service.createTournament(CreateTournamentRequest("Override result", 4)))
+    val createdTournament = awaitDomain(service.createTournament(CreateTournamentRequest("Override result", 4, "team-one", 180, 2)))
     val tournamentId = new ObjectId(createdTournament.id)
 
     awaitDomain(service.registerPlayer(tournamentId, "white-player"))
@@ -416,7 +416,7 @@ final class TournamentServiceIntegrationSpec
   test("standings read model returns ranked entries with computed tiebreaks") {
     requireDocker()
     val (service, repositories, _, _) = freshServiceContext()
-    val createdTournament = awaitDomain(service.createTournament(CreateTournamentRequest("Standings read model", 5)))
+    val createdTournament = awaitDomain(service.createTournament(CreateTournamentRequest("Standings read model", 5, "team-one", 180, 2)))
     val tournamentId = new ObjectId(createdTournament.id)
 
     awaitDomain(service.registerPlayer(tournamentId, "a"))
@@ -489,7 +489,7 @@ final class TournamentServiceIntegrationSpec
   test("crosstable read model returns per-player games and byes") {
     requireDocker()
     val (service, repositories, _, _) = freshServiceContext()
-    val createdTournament = awaitDomain(service.createTournament(CreateTournamentRequest("Crosstable read model", 4)))
+    val createdTournament = awaitDomain(service.createTournament(CreateTournamentRequest("Crosstable read model", 4, "team-one", 180, 2)))
     val tournamentId = new ObjectId(createdTournament.id)
 
     awaitDomain(service.registerPlayer(tournamentId, "alpha"))
@@ -574,7 +574,9 @@ final class TournamentServiceIntegrationSpec
   ) extends ChallengeGateway {
     override def issueChallenge(
         opponentLichessUserId: String,
-        accessToken: String
+        accessToken: String,
+        initialSeconds: Int,
+        incrementSeconds: Int
     ): Future[Either[String, IssuedChallenge]] = Future.successful(issueResponse)
 
     override def lookupGameId(challengeId: String, accessToken: String): Future[Either[String, Option[String]]] =

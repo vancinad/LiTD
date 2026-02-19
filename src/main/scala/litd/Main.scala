@@ -20,6 +20,7 @@ import litd.mongo.MongoDatabaseFactory
 import litd.mongo.migration.MigrationRunner
 import litd.mongo.repository.Repositories
 import litd.tournament.{ChallengeSyncWorker, LichessChallengeGateway, TournamentRoutes, TournamentService}
+import litd.ui.UiRoutes
 import org.mongodb.scala.MongoClient
 
 import scala.io.StdIn
@@ -63,7 +64,6 @@ object AppConfigLoader {
           clientSecret = lichessConfig.getString("clientSecret"),
           redirectUri = lichessConfig.getString("redirectUri"),
           scope = lichessConfig.getString("scope"),
-          teamId = lichessConfig.getString("teamId"),
           requestTimeoutMillis = lichessConfig.getInt("requestTimeoutMillis"),
           retryCount = lichessConfig.getInt("retryCount")
         ),
@@ -135,6 +135,7 @@ object MainObject {
     )
     val challengeWorkerCancellable = challengeWorker.start()
     val tournamentRoutes = new TournamentRoutes(appConfig.auth, authService, tournamentService)
+    val uiRoutes = new UiRoutes()
 
     /** API endpoint: GET /health returns plain "ok" for basic liveness checks. */
     val healthRoute = path("health") {
@@ -142,7 +143,7 @@ object MainObject {
         complete(StatusCodes.OK -> "ok")
       }
     }
-    val routes = healthRoute ~ authRoutes.routes ~ tournamentRoutes.routes
+    val routes = healthRoute ~ authRoutes.routes ~ tournamentRoutes.routes ~ uiRoutes.routes
 
     val binding = Await.result(
       Http()
