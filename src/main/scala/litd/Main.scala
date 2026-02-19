@@ -104,7 +104,12 @@ object MainObject {
     val tournamentService = new TournamentService(
       tournamentRepository = repositories.tournaments,
       registrationRepository = repositories.registrations,
-      roundRepository = repositories.rounds
+      roundRepository = repositories.rounds,
+      pairingRepository = repositories.pairings,
+      byeRepository = repositories.byes,
+      playerTournamentStateRepository = repositories.playerTournamentState,
+      auditEventRepository = repositories.auditEvents,
+      mongoClient = mongoClient
     )
     val tournamentRoutes = new TournamentRoutes(appConfig.auth, authService, tournamentService)
 

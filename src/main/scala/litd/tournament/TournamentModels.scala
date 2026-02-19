@@ -2,6 +2,8 @@ package litd.tournament
 
 import akka.http.scaladsl.model.StatusCodes
 
+import scala.math.{ceil, log}
+
 final case class CreateTournamentRequest(
     name: String,
     configuredMaxRounds: Int
@@ -25,6 +27,36 @@ final case class RegistrationView(
     createdAt: String
 )
 
+final case class GrantTdByeRequest(
+    lichessUserId: String,
+    scoreAwarded: Double
+)
+
+final case class GenerateRoundRequest(
+    tdByes: Seq[GrantTdByeRequest] = Seq.empty
+)
+
+final case class PairingView(
+    whiteLichessUserId: String,
+    blackLichessUserId: String
+)
+
+final case class ByeView(
+    lichessUserId: String,
+    scoreAwarded: Double,
+    reason: String
+)
+
+final case class GenerateRoundView(
+    tournamentId: String,
+    roundId: String,
+    roundNumber: Int,
+    effectiveMaxRounds: Int,
+    pairings: Seq[PairingView],
+    byes: Seq[ByeView],
+    auditEventType: String
+)
+
 sealed trait TournamentError extends Product with Serializable {
   def status: akka.http.scaladsl.model.StatusCode
   def message: String
@@ -46,10 +78,20 @@ object TournamentError {
 
 object TournamentRules {
   val MaxConfiguredRounds: Int = 15
+  val ByeReasonOdd: String = "odd"
+  val ByeReasonTdGrant: String = "td_grant"
 
   def isValidConfiguredMaxRounds(value: Int): Boolean = value > 0 && value <= MaxConfiguredRounds
 
   def nextEffectiveRound(latestRoundNumber: Option[Int]): Int = latestRoundNumber.getOrElse(0) + 1
+
+  def computeEffectiveMaxRounds(configuredMaxRounds: Int, registeredPlayerCount: Int): Int = {
+    val suggestedRounds =
+      if (registeredPlayerCount <= 1) 1
+      else ceil(log(registeredPlayerCount.toDouble) / log(2d)).toInt
+
+    math.min(configuredMaxRounds, math.max(1, suggestedRounds))
+  }
 }
 
 object RegistrationStatus {

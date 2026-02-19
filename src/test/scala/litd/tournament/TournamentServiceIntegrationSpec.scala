@@ -142,6 +142,52 @@ final class TournamentServiceIntegrationSpec
     reactivated.effectiveRound shouldBe 5
   }
 
+  test("generate first round computes effectiveMaxRounds and creates pairings plus odd bye") {
+    requireDocker()
+    val (service, _) = freshServiceContext()
+    val createdTournament = awaitDomain(service.createTournament(CreateTournamentRequest("Round gen", 6)))
+    val tournamentId = new ObjectId(createdTournament.id)
+
+    awaitDomain(service.registerPlayer(tournamentId, "alpha"))
+    awaitDomain(service.registerPlayer(tournamentId, "beta"))
+    awaitDomain(service.registerPlayer(tournamentId, "gamma"))
+
+    val generated = awaitDomain(service.generateNextRound(tournamentId, GenerateRoundRequest()))
+    generated.roundNumber shouldBe 1
+    generated.effectiveMaxRounds shouldBe 2
+    generated.pairings.size shouldBe 1
+    generated.byes.count(_.reason == TournamentRules.ByeReasonOdd) shouldBe 1
+  }
+
+  test("td-granted byes are stored during generation and explicit endpoint validates conflicts") {
+    requireDocker()
+    val (service, _) = freshServiceContext()
+    val createdTournament = awaitDomain(service.createTournament(CreateTournamentRequest("TD byes", 6)))
+    val tournamentId = new ObjectId(createdTournament.id)
+
+    awaitDomain(service.registerPlayer(tournamentId, "p1"))
+    awaitDomain(service.registerPlayer(tournamentId, "p2"))
+    awaitDomain(service.registerPlayer(tournamentId, "p3"))
+    awaitDomain(service.registerPlayer(tournamentId, "p4"))
+
+    val generated = awaitDomain(
+      service.generateNextRound(
+        tournamentId,
+        GenerateRoundRequest(tdByes = Seq(GrantTdByeRequest("p1", 0.5d)))
+      )
+    )
+    generated.byes.exists(bye => bye.lichessUserId == "p1" && bye.reason == TournamentRules.ByeReasonTdGrant) shouldBe true
+
+    val tdByeAttempt = awaitFuture(
+      service.grantTdBye(
+        tournamentId = tournamentId,
+        roundNumber = 1,
+        request = GrantTdByeRequest("p2", 0.5d)
+      )
+    )
+    tdByeAttempt.isLeft shouldBe true
+  }
+
   private def requireDocker(): Unit =
     if (!integrationEnabled) {
       cancel("Integration tests disabled; set LITD_RUN_INTEGRATION_TESTS=true to enable")
@@ -155,7 +201,16 @@ final class TournamentServiceIntegrationSpec
     val database = MongoDatabaseFactory.withCodecRegistry(client, dbName)
     awaitFuture(MigrationRunner.default(database).run())
     val repositories = Repositories.from(database)
-    val service = new TournamentService(repositories.tournaments, repositories.registrations, repositories.rounds)
+    val service = new TournamentService(
+      repositories.tournaments,
+      repositories.registrations,
+      repositories.rounds,
+      repositories.pairings,
+      repositories.byes,
+      repositories.playerTournamentState,
+      repositories.auditEvents,
+      client
+    )
     (service, repositories)
   }
 

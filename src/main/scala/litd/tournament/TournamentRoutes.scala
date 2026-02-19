@@ -21,8 +21,15 @@ final class TournamentRoutes(
 
   private implicit val createTournamentRequestDecoder: Decoder[CreateTournamentRequest] =
     deriveDecoder[CreateTournamentRequest]
+  private implicit val generateRoundRequestDecoder: Decoder[GenerateRoundRequest] =
+    deriveDecoder[GenerateRoundRequest]
+  private implicit val grantTdByeRequestDecoder: Decoder[GrantTdByeRequest] =
+    deriveDecoder[GrantTdByeRequest]
   private implicit val tournamentViewEncoder: Encoder[TournamentView] = deriveEncoder[TournamentView]
   private implicit val registrationViewEncoder: Encoder[RegistrationView] = deriveEncoder[RegistrationView]
+  private implicit val pairingViewEncoder: Encoder[PairingView] = deriveEncoder[PairingView]
+  private implicit val byeViewEncoder: Encoder[ByeView] = deriveEncoder[ByeView]
+  private implicit val generateRoundViewEncoder: Encoder[GenerateRoundView] = deriveEncoder[GenerateRoundView]
 
   private def withAuthenticatedUser(inner: AuthenticatedUser => Route): Route =
     optionalCookie(authConfig.session.cookieName) {
@@ -120,6 +127,59 @@ final class TournamentRoutes(
       }
     }
 
-  val routes: Route = createTournamentRoute ~ registerRoute ~ withdrawRoute ~ reactivateRoute
-}
+  /** API endpoint: POST /tournaments/{tournamentId}/rounds/generate generates next round transactionally with pairings/byes and audit event. */
+  private val generateRoundRoute: Route =
+    path("tournaments" / Segment / "rounds" / "generate") { tournamentIdRaw =>
+      post {
+        withAuthenticatedUser { _ =>
+          parseTournamentId(tournamentIdRaw) match {
+            case Left(error) => completeDomainError(error)
+            case Right(tournamentId) =>
+              entity(as[String]) { rawBody =>
+                decodeBody[GenerateRoundRequest](rawBody) match {
+                  case Left(error) => completeDomainError(error)
+                  case Right(request) =>
+                    onComplete(tournamentService.generateNextRound(tournamentId, request)) {
+                      case Success(Right(result)) => complete(StatusCodes.Created -> result.asJson.noSpaces)
+                      case Success(Left(error))   => completeDomainError(error)
+                      case Failure(ex)            => complete(StatusCodes.InternalServerError -> Map("error" -> ex.getMessage).asJson.noSpaces)
+                    }
+                }
+              }
+          }
+        }
+      }
+    }
 
+  /** API endpoint: POST /tournaments/{tournamentId}/rounds/{roundNumber}/byes/td grants a TD bye for an existing round if user has no pairing/bye yet. */
+  private val grantTdByeRoute: Route =
+    path("tournaments" / Segment / "rounds" / IntNumber / "byes" / "td") { (tournamentIdRaw, roundNumber) =>
+      post {
+        withAuthenticatedUser { _ =>
+          parseTournamentId(tournamentIdRaw) match {
+            case Left(error) => completeDomainError(error)
+            case Right(tournamentId) =>
+              entity(as[String]) { rawBody =>
+                decodeBody[GrantTdByeRequest](rawBody) match {
+                  case Left(error) => completeDomainError(error)
+                  case Right(request) =>
+                    onComplete(tournamentService.grantTdBye(tournamentId, roundNumber, request)) {
+                      case Success(Right(result)) => complete(StatusCodes.Created -> result.asJson.noSpaces)
+                      case Success(Left(error))   => completeDomainError(error)
+                      case Failure(ex)            => complete(StatusCodes.InternalServerError -> Map("error" -> ex.getMessage).asJson.noSpaces)
+                    }
+                }
+              }
+          }
+        }
+      }
+    }
+
+  val routes: Route =
+    createTournamentRoute ~
+      registerRoute ~
+      withdrawRoute ~
+      reactivateRoute ~
+      generateRoundRoute ~
+      grantTdByeRoute
+}

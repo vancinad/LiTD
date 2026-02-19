@@ -20,6 +20,13 @@ final class TournamentRulesSpec extends AnyFunSuite {
     assert(TournamentRules.nextEffectiveRound(Some(4)) == 5)
   }
 
+  test("computeEffectiveMaxRounds uses min(configured, ceil(log2(players)))") {
+    assert(TournamentRules.computeEffectiveMaxRounds(configuredMaxRounds = 8, registeredPlayerCount = 2) == 1)
+    assert(TournamentRules.computeEffectiveMaxRounds(configuredMaxRounds = 8, registeredPlayerCount = 8) == 3)
+    assert(TournamentRules.computeEffectiveMaxRounds(configuredMaxRounds = 8, registeredPlayerCount = 64) == 6)
+    assert(TournamentRules.computeEffectiveMaxRounds(configuredMaxRounds = 5, registeredPlayerCount = 64) == 5)
+  }
+
   test("registration status transition rules") {
     assert(RegistrationStatus.canTransition(RegistrationStatus.Registered, RegistrationStatus.Withdrawn))
     assert(RegistrationStatus.canTransition(RegistrationStatus.Withdrawn, RegistrationStatus.Registered))
@@ -27,4 +34,3 @@ final class TournamentRulesSpec extends AnyFunSuite {
     assert(!RegistrationStatus.canTransition(RegistrationStatus.Registered, RegistrationStatus.Registered))
   }
 }
-
