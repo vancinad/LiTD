@@ -8,6 +8,7 @@ import akka.http.scaladsl.model._
 import akka.pattern.after
 import io.circe.Json
 import io.circe.parser.parse
+import litd.tournament.TournamentRules
 
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
@@ -129,6 +130,35 @@ final class LichessApiClient(
       val challenge = cursor.downField("challenge").get[String]("gameId").toOption
       val game = cursor.downField("game").get[String]("id").toOption
       topLevel.orElse(challenge).orElse(game).filter(_.trim.nonEmpty)
+    }
+  }
+
+  def lookupGameResult(gameId: String, accessToken: String): Future[Option[String]] = {
+    val request = HttpRequest(
+      method = HttpMethods.GET,
+      uri = Uri(s"${config.baseUrl}/game/export/${urlEncode(gameId)}")
+        .withQuery(Query("pgnInJson" -> "true", "moves" -> "false")),
+      headers = List(
+        headers.RawHeader("Authorization", s"Bearer $accessToken"),
+        headers.RawHeader("Accept", "application/json")
+      )
+    )
+    withRetries(request).map { json =>
+      val cursor = json.hcursor
+      cursor
+        .get[String]("winner")
+        .toOption
+        .collect {
+          case TournamentRules.ResultWhite => TournamentRules.ResultWhite
+          case TournamentRules.ResultBlack => TournamentRules.ResultBlack
+        }
+        .orElse {
+          val status = cursor.get[String]("status").toOption.map(_.toLowerCase)
+          status.collect {
+            case "draw" | "stalemate" | "repetition" | "50move" | "insufficient" | "timevsinsufficient" =>
+              TournamentRules.ResultDraw
+          }
+        }
     }
   }
 

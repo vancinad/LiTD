@@ -83,6 +83,13 @@ final class RegistrationRepository(database: MongoDatabase)
         )
       )
       .toFuture()
+
+  def listByTournament(session: ClientSession, tournamentId: org.bson.types.ObjectId)(implicit
+      ec: ExecutionContext
+  ): Future[Seq[RegistrationDocument]] =
+    collection
+      .find(session, equal("tournamentId", tournamentId))
+      .toFuture()
 }
 
 final class RoundRepository(database: MongoDatabase)
@@ -123,8 +130,31 @@ final class RoundRepository(database: MongoDatabase)
       .first()
       .toFutureOption()
 
+  def findByTournamentAndRoundNumber(tournamentId: org.bson.types.ObjectId, roundNumber: Int)(implicit
+      ec: ExecutionContext
+  ): Future[Option[RoundDocument]] =
+    collection
+      .find(and(equal("tournamentId", tournamentId), equal("roundNumber", roundNumber)))
+      .first()
+      .toFutureOption()
+
   def insert(session: ClientSession, document: RoundDocument)(implicit ec: ExecutionContext): Future[RoundDocument] =
     collection.insertOne(session, document).toFuture().map(_ => document)
+
+  def markCompleted(session: ClientSession, roundId: org.bson.types.ObjectId, completedAt: java.util.Date)(implicit
+      ec: ExecutionContext
+  ): Future[Boolean] =
+    collection
+      .updateOne(
+        session,
+        and(equal("_id", roundId), org.mongodb.scala.model.Filters.ne("status", "completed")),
+        org.mongodb.scala.model.Updates.combine(
+          set("status", "completed"),
+          set("completedAt", completedAt)
+        )
+      )
+      .toFuture()
+      .map(_.getModifiedCount > 0)
 }
 
 final class PairingRepository(database: MongoDatabase)
@@ -168,6 +198,28 @@ final class PairingRepository(database: MongoDatabase)
       )
       .first()
       .toFutureOption()
+
+  def findByTournamentAndId(session: ClientSession, tournamentId: org.bson.types.ObjectId, pairingId: org.bson.types.ObjectId)(implicit
+      ec: ExecutionContext
+  ): Future[Option[PairingDocument]] =
+    collection
+      .find(session, and(equal("_id", pairingId), equal("tournamentId", tournamentId)))
+      .first()
+      .toFutureOption()
+
+  def listByRound(session: ClientSession, roundId: org.bson.types.ObjectId)(implicit
+      ec: ExecutionContext
+  ): Future[Seq[PairingDocument]] =
+    collection
+      .find(session, equal("roundId", roundId))
+      .toFuture()
+
+  def listByRound(roundId: org.bson.types.ObjectId)(implicit
+      ec: ExecutionContext
+  ): Future[Seq[PairingDocument]] =
+    collection
+      .find(equal("roundId", roundId))
+      .toFuture()
 
   def setChallengeIssued(
       session: ClientSession,
@@ -220,6 +272,40 @@ final class PairingRepository(database: MongoDatabase)
       )
       .toFuture()
       .map(_.getModifiedCount > 0)
+
+  def updateResult(
+      pairingId: org.bson.types.ObjectId,
+      result: String,
+      isOfficial: Boolean
+  )(implicit ec: ExecutionContext): Future[Boolean] =
+    collection
+      .updateOne(
+        equal("_id", pairingId),
+        org.mongodb.scala.model.Updates.combine(
+          set("result", result),
+          set("isOfficial", isOfficial)
+        )
+      )
+      .toFuture()
+      .map(_.getModifiedCount > 0)
+
+  def updateResult(
+      session: ClientSession,
+      pairingId: org.bson.types.ObjectId,
+      result: String,
+      isOfficial: Boolean
+  )(implicit ec: ExecutionContext): Future[Boolean] =
+    collection
+      .updateOne(
+        session,
+        equal("_id", pairingId),
+        org.mongodb.scala.model.Updates.combine(
+          set("result", result),
+          set("isOfficial", isOfficial)
+        )
+      )
+      .toFuture()
+      .map(_.getModifiedCount > 0)
 }
 
 final class ByeRepository(database: MongoDatabase)
@@ -244,6 +330,13 @@ final class ByeRepository(database: MongoDatabase)
       .first()
       .toFutureOption()
 
+  def listByRound(session: ClientSession, roundId: org.bson.types.ObjectId)(implicit
+      ec: ExecutionContext
+  ): Future[Seq[ByeDocument]] =
+    collection
+      .find(session, equal("roundId", roundId))
+      .toFuture()
+
   def insertMany(session: ClientSession, documents: Seq[ByeDocument])(implicit ec: ExecutionContext): Future[Unit] =
     if (documents.isEmpty) Future.unit
     else collection.insertMany(session, documents).toFuture().map(_ => ())
@@ -259,10 +352,33 @@ final class PlayerTournamentStateRepository(database: MongoDatabase)
   ): Future[Unit] =
     if (documents.isEmpty) Future.unit
     else collection.insertMany(session, documents).toFuture().map(_ => ())
+
+  def listByTournament(session: ClientSession, tournamentId: org.bson.types.ObjectId)(implicit
+      ec: ExecutionContext
+  ): Future[Seq[PlayerTournamentStateDocument]] =
+    collection
+      .find(session, equal("tournamentId", tournamentId))
+      .toFuture()
+
+  def upsertByTournamentAndUser(session: ClientSession, document: PlayerTournamentStateDocument)(implicit
+      ec: ExecutionContext
+  ): Future[Unit] =
+    collection
+      .replaceOne(
+        session,
+        and(equal("tournamentId", document.tournamentId), equal("lichessUserId", document.lichessUserId)),
+        document,
+        ReplaceOptions().upsert(true)
+      )
+      .toFuture()
+      .map(_ => ())
 }
 
 final class OverrideRepository(database: MongoDatabase)
-    extends MongoRepository[OverrideDocument](database, "overrides")
+    extends MongoRepository[OverrideDocument](database, "overrides") {
+  def insert(session: ClientSession, document: OverrideDocument)(implicit ec: ExecutionContext): Future[OverrideDocument] =
+    collection.insertOne(session, document).toFuture().map(_ => document)
+}
 
 final class AuditEventRepository(database: MongoDatabase)
     extends MongoRepository[AuditEventDocument](database, "auditEvents") {

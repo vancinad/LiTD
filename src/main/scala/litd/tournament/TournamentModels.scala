@@ -67,6 +67,34 @@ final case class IssueChallengeView(
     status: String
 )
 
+final case class RefreshRoundResultsView(
+    tournamentId: String,
+    roundNumber: Int,
+    refreshedPairings: Int
+)
+
+final case class EndRoundView(
+    tournamentId: String,
+    roundNumber: Int,
+    completedPairings: Int,
+    doubleForfeitCount: Int,
+    roundStatus: String
+)
+
+final case class OverridePairingResultRequest(
+    result: String,
+    reason: String
+)
+
+final case class OverridePairingResultView(
+    tournamentId: String,
+    pairingId: String,
+    roundNumber: Int,
+    result: String,
+    reason: String,
+    appliedBy: String
+)
+
 sealed trait TournamentError extends Product with Serializable {
   def status: akka.http.scaladsl.model.StatusCode
   def message: String
@@ -94,8 +122,15 @@ object TournamentRules {
   val MaxConfiguredRounds: Int = 15
   val ByeReasonOdd: String = "odd"
   val ByeReasonTdGrant: String = "td_grant"
+  val ResultWhite: String = "white"
+  val ResultBlack: String = "black"
+  val ResultDraw: String = "draw"
+  val ResultForfeit: String = "forfeit"
+  val AllowedResultValues: Set[String] = Set(ResultWhite, ResultBlack, ResultDraw, ResultForfeit)
 
   def isValidConfiguredMaxRounds(value: Int): Boolean = value > 0 && value <= MaxConfiguredRounds
+
+  def isValidResultValue(value: String): Boolean = AllowedResultValues.contains(value)
 
   def nextEffectiveRound(latestRoundNumber: Option[Int]): Int = latestRoundNumber.getOrElse(0) + 1
 

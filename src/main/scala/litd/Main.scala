@@ -120,6 +120,7 @@ object MainObject {
       pairingRepository = repositories.pairings,
       byeRepository = repositories.byes,
       playerTournamentStateRepository = repositories.playerTournamentState,
+      overrideRepository = repositories.overrides,
       auditEventRepository = repositories.auditEvents,
       mongoClient = mongoClient,
       challengeGateway = challengeGateway

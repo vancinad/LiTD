@@ -283,6 +283,101 @@ final class TournamentServiceIntegrationSpec
     }
   }
 
+  test("refresh round results updates pairing result from Lichess game export") {
+    requireDocker()
+    val gateway = new FakeChallengeGateway(
+      issueResponse = Right(IssuedChallenge("challenge-321", "created")),
+      lookupResponse = Right(None),
+      gameResultResponse = Right(Some(TournamentRules.ResultDraw))
+    )
+    val (service, repositories, _, _) = freshServiceContext(challengeGateway = gateway)
+    val createdTournament = awaitDomain(service.createTournament(CreateTournamentRequest("Refresh results", 4)))
+    val tournamentId = new ObjectId(createdTournament.id)
+
+    awaitDomain(service.registerPlayer(tournamentId, "white-player"))
+    awaitDomain(service.registerPlayer(tournamentId, "black-player"))
+    awaitDomain(service.generateNextRound(tournamentId, GenerateRoundRequest()))
+
+    val pairing = awaitFuture(repositories.pairings.listByTournament(tournamentId)).head
+    awaitFuture(repositories.pairings.setGameStarted(pairing._id.get, "game-321", new Date()))
+
+    val refreshed = awaitDomain(
+      service.refreshRoundResults(
+        tournamentId = tournamentId,
+        roundNumber = 1,
+        user = AuthenticatedUser("td-user", "token-a")
+      )
+    )
+
+    refreshed.refreshedPairings shouldBe 1
+    val updated = awaitFuture(repositories.pairings.findById(pairing._id.get)).getOrElse(
+      fail("Expected pairing to exist after result refresh")
+    )
+    updated.result shouldBe Some(TournamentRules.ResultDraw)
+    updated.isOfficial shouldBe false
+  }
+
+  test("end round applies double-forfeit and completes round") {
+    requireDocker()
+    val (service, repositories, _, _) = freshServiceContext()
+    val createdTournament = awaitDomain(service.createTournament(CreateTournamentRequest("End round", 4)))
+    val tournamentId = new ObjectId(createdTournament.id)
+
+    awaitDomain(service.registerPlayer(tournamentId, "white-player"))
+    awaitDomain(service.registerPlayer(tournamentId, "black-player"))
+    awaitDomain(service.generateNextRound(tournamentId, GenerateRoundRequest()))
+
+    val ended = awaitDomain(service.endRound(tournamentId, roundNumber = 1))
+    ended.doubleForfeitCount shouldBe 1
+    ended.roundStatus shouldBe "completed"
+
+    val pairing = awaitFuture(repositories.pairings.listByTournament(tournamentId)).head
+    pairing.result shouldBe Some(TournamentRules.ResultForfeit)
+    pairing.isOfficial shouldBe true
+
+    val round = awaitFuture(repositories.rounds.findByTournamentAndRoundNumber(tournamentId, 1)).getOrElse(
+      fail("Expected round 1 to exist after end round")
+    )
+    round.status shouldBe "completed"
+    round.completedAt.nonEmpty shouldBe true
+  }
+
+  test("override result stores override history and recomputes player state") {
+    requireDocker()
+    val (service, repositories, _, _) = freshServiceContext()
+    val createdTournament = awaitDomain(service.createTournament(CreateTournamentRequest("Override result", 4)))
+    val tournamentId = new ObjectId(createdTournament.id)
+
+    awaitDomain(service.registerPlayer(tournamentId, "white-player"))
+    awaitDomain(service.registerPlayer(tournamentId, "black-player"))
+    awaitDomain(service.generateNextRound(tournamentId, GenerateRoundRequest()))
+
+    val pairing = awaitFuture(repositories.pairings.listByTournament(tournamentId)).head
+    val overridden = awaitDomain(
+      service.overridePairingResult(
+        tournamentId = tournamentId,
+        pairingId = pairing._id.get,
+        request = OverridePairingResultRequest(result = "draw", reason = "agreed draw"),
+        user = AuthenticatedUser("td-user", "token-a")
+      )
+    )
+
+    overridden.result shouldBe TournamentRules.ResultDraw
+    val persistedPairing = awaitFuture(repositories.pairings.findById(pairing._id.get)).getOrElse(
+      fail("Expected pairing after override")
+    )
+    persistedPairing.result shouldBe Some(TournamentRules.ResultDraw)
+    persistedPairing.isOfficial shouldBe true
+
+    val overrides = awaitFuture(repositories.overrides.list())
+    overrides.exists(ov => ov.pairingId == pairing._id.get && ov.reason == "agreed draw" && ov.appliedBy == "td-user") shouldBe true
+
+    val states = awaitFuture(repositories.playerTournamentState.list())
+      .filter(_.tournamentId == tournamentId)
+      .sortBy(_.lichessUserId)
+    states.map(_.points) shouldBe Seq(0.5d, 0.5d)
+  }
+
   private def requireDocker(): Unit =
     if (!integrationEnabled) {
       cancel("Integration tests disabled; set LITD_RUN_INTEGRATION_TESTS=true to enable")
@@ -306,6 +401,7 @@ final class TournamentServiceIntegrationSpec
       repositories.pairings,
       repositories.byes,
       repositories.playerTournamentState,
+      repositories.overrides,
       repositories.auditEvents,
       client,
       challengeGateway
@@ -325,7 +421,8 @@ final class TournamentServiceIntegrationSpec
 
   private final class FakeChallengeGateway(
       issueResponse: Either[String, IssuedChallenge],
-      lookupResponse: Either[String, Option[String]]
+      lookupResponse: Either[String, Option[String]],
+      gameResultResponse: Either[String, Option[String]] = Right(None)
   ) extends ChallengeGateway {
     override def issueChallenge(
         opponentLichessUserId: String,
@@ -334,5 +431,8 @@ final class TournamentServiceIntegrationSpec
 
     override def lookupGameId(challengeId: String, accessToken: String): Future[Either[String, Option[String]]] =
       Future.successful(lookupResponse)
+
+    override def lookupGameResult(gameId: String, accessToken: String): Future[Either[String, Option[String]]] =
+      Future.successful(gameResultResponse)
   }
 }

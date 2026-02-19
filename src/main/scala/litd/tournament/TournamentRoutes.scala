@@ -25,12 +25,19 @@ final class TournamentRoutes(
     deriveDecoder[GenerateRoundRequest]
   private implicit val grantTdByeRequestDecoder: Decoder[GrantTdByeRequest] =
     deriveDecoder[GrantTdByeRequest]
+  private implicit val overridePairingResultRequestDecoder: Decoder[OverridePairingResultRequest] =
+    deriveDecoder[OverridePairingResultRequest]
   private implicit val tournamentViewEncoder: Encoder[TournamentView] = deriveEncoder[TournamentView]
   private implicit val registrationViewEncoder: Encoder[RegistrationView] = deriveEncoder[RegistrationView]
   private implicit val pairingViewEncoder: Encoder[PairingView] = deriveEncoder[PairingView]
   private implicit val byeViewEncoder: Encoder[ByeView] = deriveEncoder[ByeView]
   private implicit val generateRoundViewEncoder: Encoder[GenerateRoundView] = deriveEncoder[GenerateRoundView]
   private implicit val issueChallengeViewEncoder: Encoder[IssueChallengeView] = deriveEncoder[IssueChallengeView]
+  private implicit val refreshRoundResultsViewEncoder: Encoder[RefreshRoundResultsView] =
+    deriveEncoder[RefreshRoundResultsView]
+  private implicit val endRoundViewEncoder: Encoder[EndRoundView] = deriveEncoder[EndRoundView]
+  private implicit val overridePairingResultViewEncoder: Encoder[OverridePairingResultView] =
+    deriveEncoder[OverridePairingResultView]
 
   private def withAuthenticatedUser(inner: AuthenticatedUser => Route): Route =
     optionalCookie(authConfig.session.cookieName) {
@@ -199,6 +206,67 @@ final class TournamentRoutes(
       }
     }
 
+  /** API endpoint: POST /tournaments/{tournamentId}/rounds/{roundNumber}/results/refresh refreshes pairing results from Lichess games. */
+  private val refreshRoundResultsRoute: Route =
+    path("tournaments" / Segment / "rounds" / IntNumber / "results" / "refresh") { (tournamentIdRaw, roundNumber) =>
+      post {
+        withAuthenticatedUser { user =>
+          parseTournamentId(tournamentIdRaw) match {
+            case Left(error) => completeDomainError(error)
+            case Right(tournamentId) =>
+              onComplete(tournamentService.refreshRoundResults(tournamentId, roundNumber, user)) {
+                case Success(Right(result)) => complete(StatusCodes.OK -> result.asJson.noSpaces)
+                case Success(Left(error))   => completeDomainError(error)
+                case Failure(ex)            => complete(StatusCodes.BadGateway -> Map("error" -> ex.getMessage).asJson.noSpaces)
+              }
+          }
+        }
+      }
+    }
+
+  /** API endpoint: POST /tournaments/{tournamentId}/rounds/{roundNumber}/end ends an active round and applies double-forfeit for unresolved pairings. */
+  private val endRoundRoute: Route =
+    path("tournaments" / Segment / "rounds" / IntNumber / "end") { (tournamentIdRaw, roundNumber) =>
+      post {
+        withAuthenticatedUser { _ =>
+          parseTournamentId(tournamentIdRaw) match {
+            case Left(error) => completeDomainError(error)
+            case Right(tournamentId) =>
+              onComplete(tournamentService.endRound(tournamentId, roundNumber)) {
+                case Success(Right(result)) => complete(StatusCodes.OK -> result.asJson.noSpaces)
+                case Success(Left(error))   => completeDomainError(error)
+                case Failure(ex)            => complete(StatusCodes.InternalServerError -> Map("error" -> ex.getMessage).asJson.noSpaces)
+              }
+          }
+        }
+      }
+    }
+
+  /** API endpoint: POST /tournaments/{tournamentId}/pairings/{pairingId}/result/override overrides a pairing result and records override history. */
+  private val overridePairingResultRoute: Route =
+    path("tournaments" / Segment / "pairings" / Segment / "result" / "override") { (tournamentIdRaw, pairingIdRaw) =>
+      post {
+        withAuthenticatedUser { user =>
+          (parseTournamentId(tournamentIdRaw), parsePairingId(pairingIdRaw)) match {
+            case (Left(error), _)            => completeDomainError(error)
+            case (_, Left(error))            => completeDomainError(error)
+            case (Right(tournamentId), Right(pairingId)) =>
+              entity(as[String]) { rawBody =>
+                decodeBody[OverridePairingResultRequest](rawBody) match {
+                  case Left(error) => completeDomainError(error)
+                  case Right(request) =>
+                    onComplete(tournamentService.overridePairingResult(tournamentId, pairingId, request, user)) {
+                      case Success(Right(result)) => complete(StatusCodes.OK -> result.asJson.noSpaces)
+                      case Success(Left(error))   => completeDomainError(error)
+                      case Failure(ex)            => complete(StatusCodes.InternalServerError -> Map("error" -> ex.getMessage).asJson.noSpaces)
+                    }
+                }
+              }
+          }
+        }
+      }
+    }
+
   val routes: Route =
     createTournamentRoute ~
       registerRoute ~
@@ -206,5 +274,8 @@ final class TournamentRoutes(
       reactivateRoute ~
       generateRoundRoute ~
       grantTdByeRoute ~
-      issueChallengeRoute
+      issueChallengeRoute ~
+      refreshRoundResultsRoute ~
+      endRoundRoute ~
+      overridePairingResultRoute
 }
