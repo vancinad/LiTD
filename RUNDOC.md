@@ -76,7 +76,7 @@ litd {
       clientSecret = "your-lichess-oauth-client-secret"
       redirectUri = "http://localhost:8080/auth/lichess/callback"
       teamId = "your-lichess-team-id"
-      scope = "preference:read"
+      scope = "preference:read team:read challenge:write"
       requestTimeoutMillis = 5000
       retryCount = 3
     }
