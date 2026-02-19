@@ -360,6 +360,13 @@ final class PlayerTournamentStateRepository(database: MongoDatabase)
       .find(session, equal("tournamentId", tournamentId))
       .toFuture()
 
+  def listByTournament(tournamentId: org.bson.types.ObjectId)(implicit
+      ec: ExecutionContext
+  ): Future[Seq[PlayerTournamentStateDocument]] =
+    collection
+      .find(equal("tournamentId", tournamentId))
+      .toFuture()
+
   def upsertByTournamentAndUser(session: ClientSession, document: PlayerTournamentStateDocument)(implicit
       ec: ExecutionContext
   ): Future[Unit] =

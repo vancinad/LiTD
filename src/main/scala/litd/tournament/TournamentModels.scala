@@ -95,6 +95,49 @@ final case class OverridePairingResultView(
     appliedBy: String
 )
 
+final case class StandingsEntryView(
+    rank: Int,
+    lichessUserId: String,
+    points: Double,
+    gamesPlayed: Int,
+    buchholz: Double,
+    sonnebornBerger: Double
+)
+
+final case class StandingsView(
+    tournamentId: String,
+    roundCount: Int,
+    entries: Seq[StandingsEntryView]
+)
+
+final case class CrosstableCellView(
+    opponentLichessUserId: String,
+    roundNumber: Int,
+    color: String,
+    result: String,
+    score: Double
+)
+
+final case class CrosstableByeView(
+    roundNumber: Int,
+    scoreAwarded: Double,
+    reason: String
+)
+
+final case class CrosstableRowView(
+    lichessUserId: String,
+    points: Double,
+    gamesPlayed: Int,
+    games: Seq[CrosstableCellView],
+    byes: Seq[CrosstableByeView]
+)
+
+final case class CrosstableView(
+    tournamentId: String,
+    roundCount: Int,
+    rows: Seq[CrosstableRowView]
+)
+
 sealed trait TournamentError extends Product with Serializable {
   def status: akka.http.scaladsl.model.StatusCode
   def message: String

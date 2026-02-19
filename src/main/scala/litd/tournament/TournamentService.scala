@@ -239,6 +239,117 @@ final class TournamentService(
     }
   }
 
+  /** API query: compute tournament standings read model from player state plus official pairings/byes. */
+  def getStandings(tournamentId: ObjectId): Future[Either[TournamentError, StandingsView]] =
+    for {
+      tournamentOpt <- tournamentRepository.findByIdOption(tournamentId)
+      result <- tournamentOpt match {
+        case None => Future.successful(Left(NotFound(s"Tournament '${tournamentId.toHexString}' not found")))
+        case Some(_) =>
+          for {
+            states <- playerTournamentStateRepository.listByTournament(tournamentId)
+            pairings <- pairingRepository.listByTournament(tournamentId)
+            latestRoundNumber <- roundRepository.latestRoundNumberForTournament(tournamentId)
+          } yield {
+            val officialPairings = pairings.filter(pairing => pairing.isOfficial && pairing.result.nonEmpty)
+            // Milestone 7 read model: standings are sorted by points then Swiss tiebreaks.
+            val tiebreaksByUser = computeTiebreaks(states, officialPairings)
+            val ranked = rankStandingsEntries(states, tiebreaksByUser)
+            Right(
+              StandingsView(
+                tournamentId = tournamentId.toHexString,
+                roundCount = latestRoundNumber.getOrElse(0),
+                entries = ranked
+              )
+            )
+          }
+      }
+    } yield result
+
+  /** API query: compute tournament crosstable read model from official pairings and byes. */
+  def getCrosstable(tournamentId: ObjectId): Future[Either[TournamentError, CrosstableView]] =
+    for {
+      tournamentOpt <- tournamentRepository.findByIdOption(tournamentId)
+      result <- tournamentOpt match {
+        case None => Future.successful(Left(NotFound(s"Tournament '${tournamentId.toHexString}' not found")))
+        case Some(_) =>
+          for {
+            states <- playerTournamentStateRepository.listByTournament(tournamentId)
+            pairings <- pairingRepository.listByTournament(tournamentId)
+            byes <- byeRepository.listByTournament(tournamentId)
+            latestRoundNumber <- roundRepository.latestRoundNumberForTournament(tournamentId)
+          } yield {
+            val officialPairings = pairings.filter(pairing => pairing.isOfficial && pairing.result.nonEmpty)
+            val tiebreaksByUser = computeTiebreaks(states, officialPairings)
+            val sortedUserIds = rankStandingsEntries(states, tiebreaksByUser).map(_.lichessUserId)
+            // Build per-player game cells from official results only; unfinished games stay out of crosstable.
+            val pairingsByUser = officialPairings.foldLeft(Map.empty[String, Vector[CrosstableCellView]]) {
+              (acc, pairing) =>
+                val result = pairing.result.get
+                val whiteScore = resultScoreForWhite(result)
+                val blackScore = resultScoreForBlack(result)
+                val whiteCell = CrosstableCellView(
+                  opponentLichessUserId = pairing.blackLichessUserId,
+                  roundNumber = pairing.roundNumber,
+                  color = "white",
+                  result = result,
+                  score = whiteScore
+                )
+                val blackCell = CrosstableCellView(
+                  opponentLichessUserId = pairing.whiteLichessUserId,
+                  roundNumber = pairing.roundNumber,
+                  color = "black",
+                  result = result,
+                  score = blackScore
+                )
+                acc
+                  .updated(pairing.whiteLichessUserId, acc.getOrElse(pairing.whiteLichessUserId, Vector.empty) :+ whiteCell)
+                  .updated(pairing.blackLichessUserId, acc.getOrElse(pairing.blackLichessUserId, Vector.empty) :+ blackCell)
+            }
+            val byesByUser = byes.foldLeft(Map.empty[String, Vector[CrosstableByeView]]) { (acc, bye) =>
+              val view = CrosstableByeView(
+                roundNumber = bye.roundNumber,
+                scoreAwarded = bye.scoreAwarded,
+                reason = bye.reason
+              )
+              acc.updated(bye.lichessUserId, acc.getOrElse(bye.lichessUserId, Vector.empty) :+ view)
+            }
+            val stateByUser = states.map(state => state.lichessUserId -> state).toMap
+            val rows = sortedUserIds.map { userId =>
+              val state = stateByUser.getOrElse(
+                userId,
+                PlayerTournamentStateDocument(
+                  _id = None,
+                  tournamentId = tournamentId,
+                  lichessUserId = userId,
+                  points = 0d,
+                  gamesPlayed = 0,
+                  opponents = Seq.empty,
+                  colors = Seq.empty,
+                  resultsByRound = Map.empty,
+                  tiebreaks = TiebreaksDocument(0d, 0d),
+                  updatedAt = new Date(0L)
+                )
+              )
+              CrosstableRowView(
+                lichessUserId = userId,
+                points = state.points,
+                gamesPlayed = state.gamesPlayed,
+                games = pairingsByUser.getOrElse(userId, Vector.empty).sortBy(_.roundNumber),
+                byes = byesByUser.getOrElse(userId, Vector.empty).sortBy(_.roundNumber)
+              )
+            }
+            Right(
+              CrosstableView(
+                tournamentId = tournamentId.toHexString,
+                roundCount = latestRoundNumber.getOrElse(0),
+                rows = rows
+              )
+            )
+          }
+      }
+    } yield result
+
   private def generateRoundInTransaction(
       session: ClientSession,
       tournament: TournamentDocument,
@@ -904,6 +1015,67 @@ final class TournamentService(
       case TournamentRules.ResultForfeit => TournamentRules.ResultForfeit
       case _ => TournamentRules.ResultBlack
     }
+
+  private def computeTiebreaks(
+      states: Seq[PlayerTournamentStateDocument],
+      officialPairings: Seq[PairingDocument]
+  ): Map[String, TiebreaksDocument] = {
+    // Buchholz = sum(opponents' final points); SB = game score vs opponent * opponent points.
+    val pointsByUser = states.map(state => state.lichessUserId -> state.points).toMap
+    val buchholzByUser = states.map { state =>
+      val buchholz = state.opponents.map(opponent => pointsByUser.getOrElse(opponent, 0d)).sum
+      state.lichessUserId -> buchholz
+    }.toMap
+
+    val sonnebornBergerByUser = officialPairings.foldLeft(Map.empty[String, Double].withDefaultValue(0d)) {
+      (acc, pairing) =>
+        val result = pairing.result.get
+        val whiteOpponentPoints = pointsByUser.getOrElse(pairing.blackLichessUserId, 0d)
+        val blackOpponentPoints = pointsByUser.getOrElse(pairing.whiteLichessUserId, 0d)
+        val whiteContribution = resultScoreForWhite(result) * whiteOpponentPoints
+        val blackContribution = resultScoreForBlack(result) * blackOpponentPoints
+
+        acc
+          .updated(pairing.whiteLichessUserId, acc(pairing.whiteLichessUserId) + whiteContribution)
+          .updated(pairing.blackLichessUserId, acc(pairing.blackLichessUserId) + blackContribution)
+    }
+
+    states.map { state =>
+      state.lichessUserId -> TiebreaksDocument(
+        buchholz = buchholzByUser.getOrElse(state.lichessUserId, 0d),
+        sonnebornBerger = sonnebornBergerByUser(state.lichessUserId)
+      )
+    }.toMap
+  }
+
+  private def rankStandingsEntries(
+      states: Seq[PlayerTournamentStateDocument],
+      tiebreaksByUser: Map[String, TiebreaksDocument]
+  ): Seq[StandingsEntryView] = {
+    val sorted = states.sortBy { state =>
+      val tiebreaks = tiebreaksByUser.getOrElse(state.lichessUserId, TiebreaksDocument(0d, 0d))
+      (-state.points, -tiebreaks.buchholz, -tiebreaks.sonnebornBerger, state.lichessUserId)
+    }
+
+    sorted.zipWithIndex.foldLeft(Vector.empty[StandingsEntryView]) { case (acc, (state, index)) =>
+      val tiebreaks = tiebreaksByUser.getOrElse(state.lichessUserId, TiebreaksDocument(0d, 0d))
+      val currentKey = (state.points, tiebreaks.buchholz, tiebreaks.sonnebornBerger)
+      val previousRank = acc.lastOption.map(_.rank).getOrElse(1)
+      val previousKey = acc.lastOption.map(entry => (entry.points, entry.buchholz, entry.sonnebornBerger))
+      val rank =
+        if (previousKey.contains(currentKey)) previousRank
+        else index + 1
+
+      acc :+ StandingsEntryView(
+        rank = rank,
+        lichessUserId = state.lichessUserId,
+        points = state.points,
+        gamesPlayed = state.gamesPlayed,
+        buchholz = tiebreaks.buchholz,
+        sonnebornBerger = tiebreaks.sonnebornBerger
+      )
+    }
+  }
 
   private def upsertForRegistration(
       tournamentId: ObjectId,

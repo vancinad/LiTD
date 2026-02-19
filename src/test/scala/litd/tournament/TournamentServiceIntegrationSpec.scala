@@ -378,6 +378,119 @@ final class TournamentServiceIntegrationSpec
     states.map(_.points) shouldBe Seq(0.5d, 0.5d)
   }
 
+  test("standings read model returns ranked entries with computed tiebreaks") {
+    requireDocker()
+    val (service, repositories, _, _) = freshServiceContext()
+    val createdTournament = awaitDomain(service.createTournament(CreateTournamentRequest("Standings read model", 5)))
+    val tournamentId = new ObjectId(createdTournament.id)
+
+    awaitDomain(service.registerPlayer(tournamentId, "a"))
+    awaitDomain(service.registerPlayer(tournamentId, "b"))
+    awaitDomain(service.registerPlayer(tournamentId, "c"))
+    awaitDomain(service.registerPlayer(tournamentId, "d"))
+
+    awaitDomain(service.generateNextRound(tournamentId, GenerateRoundRequest()))
+    val roundOnePairings = awaitFuture(repositories.pairings.listByTournament(tournamentId)).sortBy(_.whiteLichessUserId)
+    val roundOneAb = roundOnePairings.find(p => p.whiteLichessUserId == "a" && p.blackLichessUserId == "b").getOrElse(
+      fail("Expected round 1 pairing a vs b")
+    )
+    val roundOneCd = roundOnePairings.find(p => p.whiteLichessUserId == "c" && p.blackLichessUserId == "d").getOrElse(
+      fail("Expected round 1 pairing c vs d")
+    )
+    awaitDomain(
+      service.overridePairingResult(
+        tournamentId,
+        roundOneAb._id.get,
+        OverridePairingResultRequest("white", "round 1 result"),
+        AuthenticatedUser("td-user", "token-a")
+      )
+    )
+    awaitDomain(
+      service.overridePairingResult(
+        tournamentId,
+        roundOneCd._id.get,
+        OverridePairingResultRequest("draw", "round 1 result"),
+        AuthenticatedUser("td-user", "token-a")
+      )
+    )
+    awaitDomain(service.endRound(tournamentId, 1))
+
+    awaitDomain(service.generateNextRound(tournamentId, GenerateRoundRequest()))
+    val allPairings = awaitFuture(repositories.pairings.listByTournament(tournamentId))
+    val roundTwoPairings = allPairings.filter(_.roundNumber == 2)
+    val roundTwoAc = roundTwoPairings.find(p => p.whiteLichessUserId == "a" && p.blackLichessUserId == "c").getOrElse(
+      fail("Expected round 2 pairing a vs c")
+    )
+    val roundTwoBd = roundTwoPairings.find(p => p.whiteLichessUserId == "b" && p.blackLichessUserId == "d").getOrElse(
+      fail("Expected round 2 pairing b vs d")
+    )
+    awaitDomain(
+      service.overridePairingResult(
+        tournamentId,
+        roundTwoAc._id.get,
+        OverridePairingResultRequest("draw", "round 2 result"),
+        AuthenticatedUser("td-user", "token-a")
+      )
+    )
+    awaitDomain(
+      service.overridePairingResult(
+        tournamentId,
+        roundTwoBd._id.get,
+        OverridePairingResultRequest("black", "round 2 result"),
+        AuthenticatedUser("td-user", "token-a")
+      )
+    )
+    awaitDomain(service.endRound(tournamentId, 2))
+
+    val standings = awaitDomain(service.getStandings(tournamentId))
+    standings.roundCount shouldBe 2
+    standings.entries.map(_.lichessUserId) shouldBe Seq("a", "d", "c", "b")
+    standings.entries.map(_.rank) shouldBe Seq(1, 1, 3, 4)
+    standings.entries.head.points shouldBe 1.5d
+    standings.entries.head.buchholz shouldBe 1.0d
+    standings.entries.head.sonnebornBerger shouldBe 0.5d
+  }
+
+  test("crosstable read model returns per-player games and byes") {
+    requireDocker()
+    val (service, repositories, _, _) = freshServiceContext()
+    val createdTournament = awaitDomain(service.createTournament(CreateTournamentRequest("Crosstable read model", 4)))
+    val tournamentId = new ObjectId(createdTournament.id)
+
+    awaitDomain(service.registerPlayer(tournamentId, "alpha"))
+    awaitDomain(service.registerPlayer(tournamentId, "beta"))
+    awaitDomain(service.registerPlayer(tournamentId, "gamma"))
+
+    awaitDomain(service.generateNextRound(tournamentId, GenerateRoundRequest()))
+    val pairing = awaitFuture(repositories.pairings.listByTournament(tournamentId)).headOption.getOrElse(
+      fail("Expected one pairing for three-player round")
+    )
+    awaitDomain(
+      service.overridePairingResult(
+        tournamentId,
+        pairing._id.get,
+        OverridePairingResultRequest("draw", "record result"),
+        AuthenticatedUser("td-user", "token-a")
+      )
+    )
+    awaitDomain(service.endRound(tournamentId, 1))
+
+    val crosstable = awaitDomain(service.getCrosstable(tournamentId))
+    crosstable.roundCount shouldBe 1
+    crosstable.rows.map(_.lichessUserId) shouldBe Seq("alpha", "beta", "gamma")
+
+    val alphaRow = crosstable.rows.find(_.lichessUserId == "alpha").getOrElse(fail("alpha row missing"))
+    alphaRow.points shouldBe 1.0d
+    alphaRow.games shouldBe empty
+    alphaRow.byes.map(_.reason) shouldBe Seq(TournamentRules.ByeReasonOdd)
+
+    val betaRow = crosstable.rows.find(_.lichessUserId == "beta").getOrElse(fail("beta row missing"))
+    betaRow.games.size shouldBe 1
+    betaRow.games.head.opponentLichessUserId shouldBe "gamma"
+    betaRow.games.head.result shouldBe TournamentRules.ResultDraw
+    betaRow.games.head.score shouldBe 0.5d
+  }
+
   private def requireDocker(): Unit =
     if (!integrationEnabled) {
       cancel("Integration tests disabled; set LITD_RUN_INTEGRATION_TESTS=true to enable")

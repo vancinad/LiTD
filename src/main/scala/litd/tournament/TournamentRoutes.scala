@@ -38,6 +38,12 @@ final class TournamentRoutes(
   private implicit val endRoundViewEncoder: Encoder[EndRoundView] = deriveEncoder[EndRoundView]
   private implicit val overridePairingResultViewEncoder: Encoder[OverridePairingResultView] =
     deriveEncoder[OverridePairingResultView]
+  private implicit val standingsEntryViewEncoder: Encoder[StandingsEntryView] = deriveEncoder[StandingsEntryView]
+  private implicit val standingsViewEncoder: Encoder[StandingsView] = deriveEncoder[StandingsView]
+  private implicit val crosstableCellViewEncoder: Encoder[CrosstableCellView] = deriveEncoder[CrosstableCellView]
+  private implicit val crosstableByeViewEncoder: Encoder[CrosstableByeView] = deriveEncoder[CrosstableByeView]
+  private implicit val crosstableRowViewEncoder: Encoder[CrosstableRowView] = deriveEncoder[CrosstableRowView]
+  private implicit val crosstableViewEncoder: Encoder[CrosstableView] = deriveEncoder[CrosstableView]
 
   private def withAuthenticatedUser(inner: AuthenticatedUser => Route): Route =
     optionalCookie(authConfig.session.cookieName) {
@@ -267,6 +273,38 @@ final class TournamentRoutes(
       }
     }
 
+  /** API endpoint: GET /public/tournaments/{tournamentId}/standings returns computed standings read model. */
+  private val standingsRoute: Route =
+    path("public" / "tournaments" / Segment / "standings") { tournamentIdRaw =>
+      get {
+        parseTournamentId(tournamentIdRaw) match {
+          case Left(error) => completeDomainError(error)
+          case Right(tournamentId) =>
+            onComplete(tournamentService.getStandings(tournamentId)) {
+              case Success(Right(result)) => complete(StatusCodes.OK -> result.asJson.noSpaces)
+              case Success(Left(error))   => completeDomainError(error)
+              case Failure(ex)            => complete(StatusCodes.InternalServerError -> Map("error" -> ex.getMessage).asJson.noSpaces)
+            }
+        }
+      }
+    }
+
+  /** API endpoint: GET /public/tournaments/{tournamentId}/crosstable returns computed crosstable read model. */
+  private val crosstableRoute: Route =
+    path("public" / "tournaments" / Segment / "crosstable") { tournamentIdRaw =>
+      get {
+        parseTournamentId(tournamentIdRaw) match {
+          case Left(error) => completeDomainError(error)
+          case Right(tournamentId) =>
+            onComplete(tournamentService.getCrosstable(tournamentId)) {
+              case Success(Right(result)) => complete(StatusCodes.OK -> result.asJson.noSpaces)
+              case Success(Left(error))   => completeDomainError(error)
+              case Failure(ex)            => complete(StatusCodes.InternalServerError -> Map("error" -> ex.getMessage).asJson.noSpaces)
+            }
+        }
+      }
+    }
+
   val routes: Route =
     createTournamentRoute ~
       registerRoute ~
@@ -277,5 +315,7 @@ final class TournamentRoutes(
       issueChallengeRoute ~
       refreshRoundResultsRoute ~
       endRoundRoute ~
-      overridePairingResultRoute
+      overridePairingResultRoute ~
+      standingsRoute ~
+      crosstableRoute
 }
