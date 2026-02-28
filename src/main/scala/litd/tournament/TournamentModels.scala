@@ -9,7 +9,8 @@ final case class CreateTournamentRequest(
     configuredMaxRounds: Int,
     teamId: String,
     timeControlInitialSeconds: Int,
-    timeControlIncrementSeconds: Int
+    timeControlIncrementSeconds: Int,
+    rated: Boolean
 )
 
 final case class TournamentView(
@@ -18,6 +19,7 @@ final case class TournamentView(
     teamId: String,
     timeControlInitialSeconds: Int,
     timeControlIncrementSeconds: Int,
+    rated: Boolean,
     status: String,
     configuredMaxRounds: Int,
     effectiveMaxRounds: Int,

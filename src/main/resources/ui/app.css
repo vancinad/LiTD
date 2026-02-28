@@ -179,3 +179,44 @@ td {
 .spacer {
   margin-top: 12px;
 }
+
+.input-inline-group {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.input-inline-group input[type="number"] {
+  flex: 1;
+}
+
+.radio-group {
+  display: flex;
+  gap: 12px;
+  margin-top: 6px;
+}
+
+.inline-radio-group {
+  margin-top: 0;
+  white-space: nowrap;
+}
+
+@media (max-width: 720px) {
+  .input-inline-group {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .inline-radio-group {
+    white-space: normal;
+  }
+}
+
+.radio-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-size: 14px;
+  color: var(--text);
+}

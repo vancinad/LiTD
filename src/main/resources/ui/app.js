@@ -131,18 +131,52 @@ async function renderLanding(user) {
              <h2 class="section-title">Create tournament</h2>
              <p class="subtle">Choose one of your Lichess teams. The tournament will be bound to that team.</p>
              <form id="create-tournament-form">
-               <label for="tournament-name">Tournament name</label>
-               <input id="tournament-name" type="text" maxlength="120" required />
-               <label for="tournament-rounds">Configured max rounds</label>
-               <input id="tournament-rounds" type="number" min="1" max="15" value="7" required />
-               <label for="tournament-time-initial">Clock initial (seconds)</label>
-               <input id="tournament-time-initial" type="number" min="10" max="10800" value="180" required />
-               <label for="tournament-time-increment">Clock increment (seconds)</label>
-               <input id="tournament-time-increment" type="number" min="0" max="180" value="2" required />
                <label for="tournament-team">Team</label>
                <select id="tournament-team" ${teams.length === 0 ? "disabled" : ""}>
                  ${teams.map((team) => `<option value="${escapeHtml(team.id)}">${escapeHtml(team.name)} (${escapeHtml(team.id)})</option>`).join("")}
                </select>
+               <label for="tournament-name">Tournament name</label>
+               <input id="tournament-name" type="text" maxlength="120" required />
+               <label for="tournament-rounds">Configured max rounds</label>
+               <input id="tournament-rounds" type="number" min="1" max="15" value="7" required />
+               <label for="tournament-time-initial">Clock initial</label>
+               <div class="input-inline-group">
+                 <input id="tournament-time-initial" type="number" min="10" max="10800" value="180" step="1" required />
+                 <div class="radio-group inline-radio-group">
+                   <label class="radio-option" for="tournament-time-unit-seconds">
+                     <input
+                       id="tournament-time-unit-seconds"
+                       name="tournament-time-unit"
+                       type="radio"
+                       value="seconds"
+                       checked
+                     />
+                     Seconds
+                   </label>
+                   <label class="radio-option" for="tournament-time-unit-minutes">
+                     <input
+                       id="tournament-time-unit-minutes"
+                       name="tournament-time-unit"
+                       type="radio"
+                       value="minutes"
+                     />
+                     Minutes
+                   </label>
+                 </div>
+               </div>
+               <label for="tournament-time-increment">Clock increment (seconds)</label>
+               <input id="tournament-time-increment" type="number" min="0" max="180" value="2" required />
+               <label>Game mode</label>
+               <div class="radio-group">
+                 <label class="radio-option" for="tournament-rated">
+                   <input id="tournament-rated" name="tournament-game-mode" type="radio" value="rated" checked />
+                   Rated
+                 </label>
+                 <label class="radio-option" for="tournament-unrated">
+                   <input id="tournament-unrated" name="tournament-game-mode" type="radio" value="unrated" />
+                   Unrated
+                 </label>
+               </div>
                <div class="spacer">
                  <button id="create-tournament-btn" type="submit" ${teams.length === 0 ? "disabled" : ""}>Create tournament</button>
                </div>
@@ -166,8 +200,11 @@ async function renderLanding(user) {
         event.preventDefault();
         const name = document.getElementById("tournament-name").value.trim();
         const configuredMaxRounds = Number(document.getElementById("tournament-rounds").value);
-        const timeControlInitialSeconds = Number(document.getElementById("tournament-time-initial").value);
+        const initialValue = Number(document.getElementById("tournament-time-initial").value);
+        const isMinutes = document.getElementById("tournament-time-unit-minutes").checked;
+        const timeControlInitialSeconds = isMinutes ? initialValue * 60 : initialValue;
         const timeControlIncrementSeconds = Number(document.getElementById("tournament-time-increment").value);
+        const rated = document.getElementById("tournament-rated").checked;
         const teamId = document.getElementById("tournament-team").value;
         submitBtn.disabled = true;
         messageEl.innerHTML = `<p class="subtle">Creating tournament...</p>`;
@@ -179,7 +216,8 @@ async function renderLanding(user) {
               configuredMaxRounds,
               teamId,
               timeControlInitialSeconds,
-              timeControlIncrementSeconds
+              timeControlIncrementSeconds,
+              rated
             })
           });
           messageEl.innerHTML = setMessage("ok", `Tournament created: ${created.name}`);
@@ -231,6 +269,7 @@ async function renderTournamentPage(user, tournamentId, tab) {
       </p>
       <p class="subtle">Configured max rounds: ${hub.tournament.configuredMaxRounds} | Effective max rounds: ${hub.tournament.effectiveMaxRounds}</p>
       <p class="subtle">Time control: ${hub.tournament.timeControlInitialSeconds}+${hub.tournament.timeControlIncrementSeconds}</p>
+      <p class="subtle">Game mode: ${hub.tournament.rated ? "Rated" : "Unrated"}</p>
       <p class="subtle">Team: ${escapeHtml(hub.tournament.teamId || "(legacy tournament: team unspecified)")}</p>
       ${tabs}
       <div id="tab-content"></div>

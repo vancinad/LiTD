@@ -11,6 +11,7 @@ final case class TournamentDocument(
     teamId: String,
     timeControlInitialSeconds: Int,
     timeControlIncrementSeconds: Int,
+    rated: Boolean,
     status: String,
     configuredMaxRounds: Int,
     effectiveMaxRounds: Int,
