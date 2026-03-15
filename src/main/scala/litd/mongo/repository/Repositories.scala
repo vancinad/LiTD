@@ -115,6 +115,13 @@ final class RegistrationRepository(database: MongoDatabase)
       .find(session, equal("tournamentId", tournamentId))
       .toFuture()
 
+  def listByTournament(tournamentId: org.bson.types.ObjectId)(implicit
+      ec: ExecutionContext
+  ): Future[Seq[RegistrationDocument]] =
+    collection
+      .find(equal("tournamentId", tournamentId))
+      .toFuture()
+
   def listByUser(lichessUserId: String, limit: Int = 50)(implicit ec: ExecutionContext): Future[Seq[RegistrationDocument]] =
     collection
       .find(equal("lichessUserId", lichessUserId))
@@ -286,17 +293,6 @@ final class PairingRepository(database: MongoDatabase)
       )
       .toFuture()
       .map(_.getModifiedCount > 0)
-
-  def listPendingChallengeGames(limit: Int)(implicit ec: ExecutionContext): Future[Seq[PairingDocument]] =
-    collection
-      .find(
-        and(
-          equal("gameId", ""),
-          org.mongodb.scala.model.Filters.exists("challengeId", exists = true)
-        )
-      )
-      .limit(limit)
-      .toFuture()
 
   def setGameStarted(
       pairingId: org.bson.types.ObjectId,

@@ -33,8 +33,6 @@ final class TournamentRoutes(
   private implicit val byeViewEncoder: Encoder[ByeView] = deriveEncoder[ByeView]
   private implicit val generateRoundViewEncoder: Encoder[GenerateRoundView] = deriveEncoder[GenerateRoundView]
   private implicit val issueChallengeViewEncoder: Encoder[IssueChallengeView] = deriveEncoder[IssueChallengeView]
-  private implicit val refreshRoundResultsViewEncoder: Encoder[RefreshRoundResultsView] =
-    deriveEncoder[RefreshRoundResultsView]
   private implicit val endRoundViewEncoder: Encoder[EndRoundView] = deriveEncoder[EndRoundView]
   private implicit val overridePairingResultViewEncoder: Encoder[OverridePairingResultView] =
     deriveEncoder[OverridePairingResultView]
@@ -79,6 +77,25 @@ final class TournamentRoutes(
   private def completeUnexpectedFailure(status: akka.http.scaladsl.model.StatusCode): Route =
     complete(status -> Map("error" -> "Unexpected server error").asJson.noSpaces)
 
+  private def withTournamentDirectorAuthorization(
+      tournamentId: ObjectId,
+      user: AuthenticatedUser
+  )(inner: => Route): Route =
+    onComplete(tournamentService.getTournament(tournamentId)) {
+      case Success(Left(error)) => completeDomainError(error)
+      case Success(Right(tournament)) =>
+        if (tournament.tournamentDirectorLichessUserId != user.lichessUserId) {
+          complete(
+            StatusCodes.Forbidden -> Map(
+              "error" -> s"Only tournament director '${tournament.tournamentDirectorLichessUserId}' can perform this action"
+            ).asJson.noSpaces
+          )
+        } else {
+          inner
+        }
+      case Failure(_) => completeUnexpectedFailure(StatusCodes.InternalServerError)
+    }
+
   private def decodeBody[T: Decoder](rawBody: String): Either[TournamentError, T] =
     decode[T](rawBody).left.map(err => TournamentError.BadRequest(s"Invalid request body: ${err.getMessage}"))
 
@@ -96,7 +113,7 @@ final class TournamentRoutes(
                   case Success(Right(false)) =>
                     complete(StatusCodes.Forbidden -> Map("error" -> s"User is not in team '${request.teamId}'").asJson.noSpaces)
                   case Success(Right(true)) =>
-                    onComplete(tournamentService.createTournament(request)) {
+                    onComplete(tournamentService.createTournament(request, user.lichessUserId)) {
                       case Success(Right(created)) => complete(StatusCodes.Created -> created.asJson.noSpaces)
                       case Success(Left(error))    => completeDomainError(error)
                       case Failure(_) => completeUnexpectedFailure(StatusCodes.InternalServerError)
@@ -180,23 +197,25 @@ final class TournamentRoutes(
       }
     }
 
-  /** API endpoint: POST /tournaments/{tournamentId}/rounds/generate generates next round transactionally with pairings/byes and audit event. */
+  /** API endpoint: POST /tournaments/{tournamentId}/rounds/generate generates next round; only the tournament director may call this. */
   private val generateRoundRoute: Route =
     path("tournaments" / Segment / "rounds" / "generate") { tournamentIdRaw =>
       post {
-        withAuthenticatedUser { _ =>
+        withAuthenticatedUser { user =>
           parseTournamentId(tournamentIdRaw) match {
             case Left(error) => completeDomainError(error)
             case Right(tournamentId) =>
-              entity(as[String]) { rawBody =>
-                decodeBody[GenerateRoundRequest](rawBody) match {
-                  case Left(error) => completeDomainError(error)
-                  case Right(request) =>
-                    onComplete(tournamentService.generateNextRound(tournamentId, request)) {
-                      case Success(Right(result)) => complete(StatusCodes.Created -> result.asJson.noSpaces)
-                      case Success(Left(error))   => completeDomainError(error)
-                      case Failure(_) => completeUnexpectedFailure(StatusCodes.InternalServerError)
-                    }
+              withTournamentDirectorAuthorization(tournamentId, user) {
+                entity(as[String]) { rawBody =>
+                  decodeBody[GenerateRoundRequest](rawBody) match {
+                    case Left(error) => completeDomainError(error)
+                    case Right(request) =>
+                      onComplete(tournamentService.generateNextRound(tournamentId, request)) {
+                        case Success(Right(result)) => complete(StatusCodes.Created -> result.asJson.noSpaces)
+                        case Success(Left(error))   => completeDomainError(error)
+                        case Failure(_) => completeUnexpectedFailure(StatusCodes.InternalServerError)
+                      }
+                  }
                 }
               }
           }
@@ -208,19 +227,21 @@ final class TournamentRoutes(
   private val grantTdByeRoute: Route =
     path("tournaments" / Segment / "rounds" / IntNumber / "byes" / "td") { (tournamentIdRaw, roundNumber) =>
       post {
-        withAuthenticatedUser { _ =>
+        withAuthenticatedUser { user =>
           parseTournamentId(tournamentIdRaw) match {
             case Left(error) => completeDomainError(error)
             case Right(tournamentId) =>
-              entity(as[String]) { rawBody =>
-                decodeBody[GrantTdByeRequest](rawBody) match {
-                  case Left(error) => completeDomainError(error)
-                  case Right(request) =>
-                    onComplete(tournamentService.grantTdBye(tournamentId, roundNumber, request)) {
-                      case Success(Right(result)) => complete(StatusCodes.Created -> result.asJson.noSpaces)
-                      case Success(Left(error))   => completeDomainError(error)
-                      case Failure(_) => completeUnexpectedFailure(StatusCodes.InternalServerError)
-                    }
+              withTournamentDirectorAuthorization(tournamentId, user) {
+                entity(as[String]) { rawBody =>
+                  decodeBody[GrantTdByeRequest](rawBody) match {
+                    case Left(error) => completeDomainError(error)
+                    case Right(request) =>
+                      onComplete(tournamentService.grantTdBye(tournamentId, roundNumber, request)) {
+                        case Success(Right(result)) => complete(StatusCodes.Created -> result.asJson.noSpaces)
+                        case Success(Left(error))   => completeDomainError(error)
+                        case Failure(_) => completeUnexpectedFailure(StatusCodes.InternalServerError)
+                      }
+                  }
                 }
               }
           }
@@ -249,43 +270,27 @@ final class TournamentRoutes(
       }
     }
 
-  /** API endpoint: POST /tournaments/{tournamentId}/rounds/{roundNumber}/results/refresh refreshes pairing results from Lichess games. */
-  private val refreshRoundResultsRoute: Route =
-    path("tournaments" / Segment / "rounds" / IntNumber / "results" / "refresh") { (tournamentIdRaw, roundNumber) =>
+  /** API endpoint: POST /tournaments/{tournamentId}/rounds/{roundNumber}/end ends an active round; only the tournament director may call this. */
+  private val endRoundRoute: Route =
+    path("tournaments" / Segment / "rounds" / IntNumber / "end") { (tournamentIdRaw, roundNumber) =>
       post {
         withAuthenticatedUser { user =>
           parseTournamentId(tournamentIdRaw) match {
             case Left(error) => completeDomainError(error)
             case Right(tournamentId) =>
-              onComplete(tournamentService.refreshRoundResults(tournamentId, roundNumber, user)) {
-                case Success(Right(result)) => complete(StatusCodes.OK -> result.asJson.noSpaces)
-                case Success(Left(error))   => completeDomainError(error)
-                case Failure(_) => completeUnexpectedFailure(StatusCodes.BadGateway)
+              withTournamentDirectorAuthorization(tournamentId, user) {
+                onComplete(tournamentService.endRound(tournamentId, roundNumber)) {
+                  case Success(Right(result)) => complete(StatusCodes.OK -> result.asJson.noSpaces)
+                  case Success(Left(error))   => completeDomainError(error)
+                  case Failure(_) => completeUnexpectedFailure(StatusCodes.InternalServerError)
+                }
               }
           }
         }
       }
     }
 
-  /** API endpoint: POST /tournaments/{tournamentId}/rounds/{roundNumber}/end ends an active round and applies double-forfeit for unresolved pairings. */
-  private val endRoundRoute: Route =
-    path("tournaments" / Segment / "rounds" / IntNumber / "end") { (tournamentIdRaw, roundNumber) =>
-      post {
-        withAuthenticatedUser { _ =>
-          parseTournamentId(tournamentIdRaw) match {
-            case Left(error) => completeDomainError(error)
-            case Right(tournamentId) =>
-              onComplete(tournamentService.endRound(tournamentId, roundNumber)) {
-                case Success(Right(result)) => complete(StatusCodes.OK -> result.asJson.noSpaces)
-                case Success(Left(error))   => completeDomainError(error)
-                case Failure(_) => completeUnexpectedFailure(StatusCodes.InternalServerError)
-              }
-          }
-        }
-      }
-    }
-
-  /** API endpoint: POST /tournaments/{tournamentId}/pairings/{pairingId}/result/override overrides a pairing result and records override history. */
+  /** API endpoint: POST /tournaments/{tournamentId}/pairings/{pairingId}/result/override overrides a pairing result; only the tournament director may call this. */
   private val overridePairingResultRoute: Route =
     path("tournaments" / Segment / "pairings" / Segment / "result" / "override") { (tournamentIdRaw, pairingIdRaw) =>
       post {
@@ -294,15 +299,17 @@ final class TournamentRoutes(
             case (Left(error), _)            => completeDomainError(error)
             case (_, Left(error))            => completeDomainError(error)
             case (Right(tournamentId), Right(pairingId)) =>
-              entity(as[String]) { rawBody =>
-                decodeBody[OverridePairingResultRequest](rawBody) match {
-                  case Left(error) => completeDomainError(error)
-                  case Right(request) =>
-                    onComplete(tournamentService.overridePairingResult(tournamentId, pairingId, request, user)) {
-                      case Success(Right(result)) => complete(StatusCodes.OK -> result.asJson.noSpaces)
-                      case Success(Left(error))   => completeDomainError(error)
-                      case Failure(_) => completeUnexpectedFailure(StatusCodes.InternalServerError)
-                    }
+              withTournamentDirectorAuthorization(tournamentId, user) {
+                entity(as[String]) { rawBody =>
+                  decodeBody[OverridePairingResultRequest](rawBody) match {
+                    case Left(error) => completeDomainError(error)
+                    case Right(request) =>
+                      onComplete(tournamentService.overridePairingResult(tournamentId, pairingId, request, user)) {
+                        case Success(Right(result)) => complete(StatusCodes.OK -> result.asJson.noSpaces)
+                        case Success(Left(error))   => completeDomainError(error)
+                        case Failure(_) => completeUnexpectedFailure(StatusCodes.InternalServerError)
+                      }
+                  }
                 }
               }
           }
@@ -325,14 +332,17 @@ final class TournamentRoutes(
   private val tournamentHubRoute: Route =
     path("public" / "tournaments" / Segment / "hub") { tournamentIdRaw =>
       get {
-        parseTournamentId(tournamentIdRaw) match {
-          case Left(error) => completeDomainError(error)
-          case Right(tournamentId) =>
-            onComplete(tournamentService.getTournamentHub(tournamentId)) {
-              case Success(Right(result)) => complete(StatusCodes.OK -> result.asJson.noSpaces)
-              case Success(Left(error))   => completeDomainError(error)
-              case Failure(_) => completeUnexpectedFailure(StatusCodes.InternalServerError)
-            }
+        parameter("refreshResults".?) { refreshResultsRaw =>
+          parseTournamentId(tournamentIdRaw) match {
+            case Left(error) => completeDomainError(error)
+            case Right(tournamentId) =>
+              val refreshResults = refreshResultsRaw.exists(_.equalsIgnoreCase("true"))
+              onComplete(tournamentService.getTournamentHub(tournamentId, refreshResults = refreshResults)) {
+                case Success(Right(result)) => complete(StatusCodes.OK -> result.asJson.noSpaces)
+                case Success(Left(error))   => completeDomainError(error)
+                case Failure(_) => completeUnexpectedFailure(StatusCodes.InternalServerError)
+              }
+          }
         }
       }
     }
@@ -428,7 +438,6 @@ final class TournamentRoutes(
       generateRoundRoute ~
       grantTdByeRoute ~
       issueChallengeRoute ~
-      refreshRoundResultsRoute ~
       endRoundRoute ~
       overridePairingResultRoute ~
       publicTournamentListRoute ~

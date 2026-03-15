@@ -6,6 +6,7 @@ import akka.http.scaladsl.Http
 import akka.http.scaladsl.model.Uri.Query
 import akka.http.scaladsl.model._
 import akka.pattern.after
+import io.circe.HCursor
 import io.circe.Json
 import io.circe.parser.parse
 import litd.tournament.TournamentRules
@@ -102,7 +103,8 @@ final class LichessApiClient(
       opponentUserId: String,
       accessToken: String,
       initialSeconds: Int,
-      incrementSeconds: Int
+      incrementSeconds: Int,
+      challengerColor: String
   ): Future[LichessChallengeResponse] = {
     val request = HttpRequest(
       method = HttpMethods.POST,
@@ -110,7 +112,8 @@ final class LichessApiClient(
       headers = List(headers.RawHeader("Authorization", s"Bearer $accessToken")),
       entity = FormData(
         "clock.limit" -> initialSeconds.toString,
-        "clock.increment" -> incrementSeconds.toString
+        "clock.increment" -> incrementSeconds.toString,
+        "color" -> challengerColor
       ).toEntity
     )
     withRetries(request).flatMap { json =>
@@ -128,56 +131,48 @@ final class LichessApiClient(
         for {
           challengeId <- idResult.toTry
           status = statusResult.getOrElse("created")
-        } yield LichessChallengeResponse(challengeId, status)
+        } yield LichessChallengeResponse(challengeId, status, challengerColor)
       }.recoverWith { case ex =>
         Future.failed(new RuntimeException(s"Failed to parse Lichess challenge response: ${ex.getMessage}", ex))
       }
     }
   }
 
-  def lookupChallengeGameId(challengeId: String, accessToken: String): Future[Option[String]] = {
-    val request = HttpRequest(
-      method = HttpMethods.GET,
-      uri = s"${config.baseUrl}/api/challenge/${urlEncode(challengeId)}",
-      headers = List(headers.RawHeader("Authorization", s"Bearer $accessToken"))
-    )
-    withRetries(request).map { json =>
-      val cursor = json.hcursor
-      val topLevel = cursor.get[String]("gameId").toOption
-      val challenge = cursor.downField("challenge").get[String]("gameId").toOption
-      val game = cursor.downField("game").get[String]("id").toOption
-      topLevel.orElse(challenge).orElse(game).filter(_.trim.nonEmpty)
+  def lookupGameResults(gameIds: Seq[String]): Future[Map[String, String]] = {
+    val normalizedIds = gameIds.map(_.trim).filter(_.nonEmpty).distinct
+    if (normalizedIds.isEmpty) {
+      Future.successful(Map.empty)
+    } else {
+      val requestBody = normalizedIds.mkString(",")
+      val request = HttpRequest(
+        method = HttpMethods.POST,
+        uri = Uri(s"${config.baseUrl}/api/games/export/_ids")
+          .withQuery(Query("pgnInJson" -> "true", "moves" -> "false")),
+        headers = List(headers.RawHeader("Accept", "application/x-ndjson")),
+        entity = HttpEntity(ContentTypes.`text/plain(UTF-8)`, requestBody)
+      )
+
+      // Set a breakpoint here to inspect outgoing game IDs and request details.
+      val responseBodyFuture: Future[String] = withRetriesBody(request)
+
+      responseBodyFuture.map { responseBody =>
+        // Set a breakpoint here to inspect raw NDJSON returned by Lichess.
+        parseGameResultsBody(responseBody)
+      }
     }
   }
 
-  def lookupGameResult(gameId: String, accessToken: String): Future[Option[String]] = {
-    val request = HttpRequest(
-      method = HttpMethods.GET,
-      uri = Uri(s"${config.baseUrl}/game/export/${urlEncode(gameId)}")
-        .withQuery(Query("pgnInJson" -> "true", "moves" -> "false")),
-      headers = List(
-        headers.RawHeader("Authorization", s"Bearer $accessToken"),
-        headers.RawHeader("Accept", "application/json")
-      )
-    )
-    withRetries(request).map { json =>
-      val cursor = json.hcursor
-      cursor
-        .get[String]("winner")
-        .toOption
-        .collect {
-          case TournamentRules.ResultWhite => TournamentRules.ResultWhite
-          case TournamentRules.ResultBlack => TournamentRules.ResultBlack
+  private def parseGameResultsBody(responseBody: String): Map[String, String] =
+    responseBody.linesIterator
+      .flatMap { line =>
+        parse(line).toOption.flatMap { json =>
+          val cursor = json.hcursor
+          val gameId = cursor.get[String]("id").toOption.map(_.trim).filter(_.nonEmpty)
+          val result = parseResult(cursor)
+          gameId.flatMap(id => result.map(id -> _))
         }
-        .orElse {
-          val status = cursor.get[String]("status").toOption.map(_.toLowerCase)
-          status.collect {
-            case "draw" | "stalemate" | "repetition" | "50move" | "insufficient" | "timevsinsufficient" =>
-              TournamentRules.ResultDraw
-          }
-        }
-    }
-  }
+      }
+      .toMap
 
   private def withRetries(request: HttpRequest): Future[Json] =
     retry(config.retryCount.max(1)) {
@@ -230,6 +225,22 @@ final class LichessApiClient(
         Failure(new RuntimeException(s"Token payload missing access_token: $body"))
     }
   }
+
+  private def parseResult(cursor: HCursor): Option[String] =
+    cursor
+      .get[String]("winner")
+      .toOption
+      .collect {
+        case TournamentRules.ResultWhite => TournamentRules.ResultWhite
+        case TournamentRules.ResultBlack => TournamentRules.ResultBlack
+      }
+      .orElse {
+        val status = cursor.get[String]("status").toOption.map(_.toLowerCase)
+        status.collect {
+          case "draw" | "stalemate" | "repetition" | "50move" | "insufficient" | "timevsinsufficient" =>
+            TournamentRules.ResultDraw
+        }
+      }
 
   private def retry[T](attempts: Int)(thunk: => Future[T]): Future[T] =
     thunk.recoverWith { case ex if attempts > 1 =>

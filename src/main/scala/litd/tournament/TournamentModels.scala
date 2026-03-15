@@ -17,6 +17,7 @@ final case class TournamentView(
     id: String,
     name: String,
     teamId: String,
+    tournamentDirectorLichessUserId: String,
     timeControlInitialSeconds: Int,
     timeControlIncrementSeconds: Int,
     rated: Boolean,
@@ -73,12 +74,6 @@ final case class IssueChallengeView(
     blackLichessUserId: String,
     challengeId: String,
     status: String
-)
-
-final case class RefreshRoundResultsView(
-    tournamentId: String,
-    roundNumber: Int,
-    refreshedPairings: Int
 )
 
 final case class EndRoundView(

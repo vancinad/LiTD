@@ -242,7 +242,7 @@ function resolveTab(pathParts) {
 async function renderTournamentPage(user, tournamentId, tab) {
   let hub;
   try {
-    hub = await fetchJson(`/public/tournaments/${tournamentId}/hub`);
+    hub = await fetchJson(`/public/tournaments/${tournamentId}/hub?refreshResults=true`);
   } catch (error) {
     appEl.innerHTML = setMessage("error", error.message);
     return;
@@ -250,6 +250,7 @@ async function renderTournamentPage(user, tournamentId, tab) {
 
   const qsTab = new URLSearchParams(window.location.search).get("tab");
   const resolvedTab = qsTab === "mypairings" ? "mypairings" : tab;
+  const directorId = hub.tournament.tournamentDirectorLichessUserId || "unknown";
 
   const tabs = `
     <nav class="tabs">
@@ -271,6 +272,7 @@ async function renderTournamentPage(user, tournamentId, tab) {
       <p class="subtle">Time control: ${hub.tournament.timeControlInitialSeconds}+${hub.tournament.timeControlIncrementSeconds}</p>
       <p class="subtle">Game mode: ${hub.tournament.rated ? "Rated" : "Unrated"}</p>
       <p class="subtle">Team: ${escapeHtml(hub.tournament.teamId || "(legacy tournament: team unspecified)")}</p>
+      <p class="subtle">Tournament director: ${escapeHtml(directorId)}</p>
       ${tabs}
       <div id="tab-content"></div>
     </section>
@@ -295,6 +297,8 @@ async function renderTournamentPage(user, tournamentId, tab) {
 
 function renderOverview(target, tournamentId, hub, user) {
   const progress = hub.roundProgress;
+  const directorId = hub.tournament.tournamentDirectorLichessUserId || "unknown";
+  const isDirector = Boolean(user && directorId === user.lichessUserId);
   target.innerHTML = `
     <div class="grid">
       <article class="card">
@@ -311,6 +315,31 @@ function renderOverview(target, tournamentId, hub, user) {
         <p class="subtle">Register for this tournament and then issue challenges from My Pairings.</p>
         <button id="register-btn" ${user ? "" : "disabled"}>${user ? "Register" : "Sign in required"}</button>
         <div id="register-message" class="spacer"></div>
+      </article>
+      <article class="card">
+        <h2 class="section-title">Director actions</h2>
+        ${
+          isDirector
+            ? `<p class="subtle">You can generate rounds, close rounds, and adjudicate pairings.</p>
+               <div class="spacer"><button id="generate-round-btn">Generate next round</button></div>
+               <div class="spacer"><button id="end-round-btn" ${hub.currentRoundNumber <= 0 || hub.currentRoundStatus !== "active" ? "disabled" : ""}>Close current round</button></div>
+               <form id="override-result-form" class="spacer">
+                 <label for="override-pairing-id">Pairing ID</label>
+                 <input id="override-pairing-id" type="text" minlength="24" maxlength="24" required />
+                 <label for="override-result">Result</label>
+                 <select id="override-result">
+                   <option value="white">white</option>
+                   <option value="black">black</option>
+                   <option value="draw">draw</option>
+                   <option value="forfeit">forfeit</option>
+                 </select>
+                 <label for="override-reason">Reason</label>
+                 <input id="override-reason" type="text" maxlength="160" required />
+                 <div class="spacer"><button id="override-submit-btn" type="submit">Adjudicate pairing</button></div>
+               </form>`
+            : `<p class="subtle">Only tournament director ${escapeHtml(directorId)} can generate pairings, close rounds, or adjudicate games.</p>`
+        }
+        <div id="director-message" class="spacer"></div>
       </article>
     </div>
   `;
@@ -333,6 +362,67 @@ function renderOverview(target, tournamentId, hub, user) {
       registerBtn.disabled = false;
     }
   });
+
+  if (!isDirector) return;
+  const directorMessage = document.getElementById("director-message");
+  const generateRoundBtn = document.getElementById("generate-round-btn");
+  const endRoundBtn = document.getElementById("end-round-btn");
+  const overrideForm = document.getElementById("override-result-form");
+  if (generateRoundBtn) {
+    generateRoundBtn.addEventListener("click", async () => {
+      generateRoundBtn.disabled = true;
+      directorMessage.innerHTML = `<p class="subtle">Generating next round...</p>`;
+      try {
+        const response = await fetchJson(`/tournaments/${tournamentId}/rounds/generate`, {
+          method: "POST",
+          body: JSON.stringify({ tdByes: [] })
+        });
+        directorMessage.innerHTML = setMessage("ok", `Round ${response.roundNumber} generated.`);
+        await renderTournamentPage(user, tournamentId, "overview");
+      } catch (error) {
+        directorMessage.innerHTML = setMessage("error", error.message);
+        generateRoundBtn.disabled = false;
+      }
+    });
+  }
+  if (endRoundBtn) {
+    endRoundBtn.addEventListener("click", async () => {
+      endRoundBtn.disabled = true;
+      directorMessage.innerHTML = `<p class="subtle">Closing round ${hub.currentRoundNumber}...</p>`;
+      try {
+        const response = await fetchJson(`/tournaments/${tournamentId}/rounds/${hub.currentRoundNumber}/end`, {
+          method: "POST"
+        });
+        directorMessage.innerHTML = setMessage("ok", `Round ${response.roundNumber} closed.`);
+        await renderTournamentPage(user, tournamentId, "overview");
+      } catch (error) {
+        directorMessage.innerHTML = setMessage("error", error.message);
+        endRoundBtn.disabled = false;
+      }
+    });
+  }
+  if (overrideForm) {
+    overrideForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const submitBtn = document.getElementById("override-submit-btn");
+      const pairingId = document.getElementById("override-pairing-id").value.trim();
+      const result = document.getElementById("override-result").value;
+      const reason = document.getElementById("override-reason").value.trim();
+      submitBtn.disabled = true;
+      directorMessage.innerHTML = `<p class="subtle">Applying adjudication...</p>`;
+      try {
+        await fetchJson(`/tournaments/${tournamentId}/pairings/${pairingId}/result/override`, {
+          method: "POST",
+          body: JSON.stringify({ result, reason })
+        });
+        directorMessage.innerHTML = setMessage("ok", "Pairing adjudication applied.");
+        await renderTournamentPage(user, tournamentId, "overview");
+      } catch (error) {
+        directorMessage.innerHTML = setMessage("error", error.message);
+        submitBtn.disabled = false;
+      }
+    });
+  }
 }
 
 async function renderStandings(target, tournamentId, currentUserId) {

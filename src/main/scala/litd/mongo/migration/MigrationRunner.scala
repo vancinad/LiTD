@@ -60,7 +60,8 @@ object MigrationRunner {
         SchemaEvolutionBackfillMigration,
         TournamentTeamMigration,
         TournamentTimeControlMigration,
-        TournamentRatedMigration
+        TournamentRatedMigration,
+        TournamentDirectorMigration
       )
     )
 }

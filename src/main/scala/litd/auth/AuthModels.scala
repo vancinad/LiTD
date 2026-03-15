@@ -37,7 +37,8 @@ final case class OAuthTokenResponse(
 
 final case class LichessChallengeResponse(
     challengeId: String,
-    status: String
+    status: String,
+    challengerColor: String
 )
 
 final case class AuthenticatedUser(

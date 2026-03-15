@@ -9,6 +9,7 @@ final case class TournamentDocument(
     _id: Option[ObjectId] = None,
     name: String,
     teamId: String,
+    tournamentDirectorLichessUserId: String,
     timeControlInitialSeconds: Int,
     timeControlIncrementSeconds: Int,
     rated: Boolean,

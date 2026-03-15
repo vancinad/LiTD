@@ -49,14 +49,20 @@ final class TournamentService(
 )(implicit ec: ExecutionContext) {
 
   /** Creates a tournament with spec-capped configured rounds and draft status. */
-  def createTournament(request: CreateTournamentRequest): Future[Either[TournamentError, TournamentView]] = {
+  def createTournament(
+      request: CreateTournamentRequest,
+      tournamentDirectorLichessUserId: String
+  ): Future[Either[TournamentError, TournamentView]] = {
     val trimmedName = request.name.trim
     val trimmedTeamId = request.teamId.trim
+    val trimmedDirectorId = tournamentDirectorLichessUserId.trim
 
     if (trimmedName.isEmpty) {
       Future.successful(Left(BadRequest("Tournament name must not be empty")))
     } else if (trimmedTeamId.isEmpty) {
       Future.successful(Left(BadRequest("teamId must not be empty")))
+    } else if (trimmedDirectorId.isEmpty) {
+      Future.successful(Left(BadRequest("tournamentDirectorLichessUserId must not be empty")))
     } else if (!TournamentRules.isValidConfiguredMaxRounds(request.configuredMaxRounds)) {
       Future.successful(
         Left(BadRequest(s"configuredMaxRounds must be between 1 and ${TournamentRules.MaxConfiguredRounds}"))
@@ -83,6 +89,7 @@ final class TournamentService(
         _id = Some(new ObjectId()),
         name = trimmedName,
         teamId = trimmedTeamId,
+        tournamentDirectorLichessUserId = trimmedDirectorId,
         timeControlInitialSeconds = request.timeControlInitialSeconds,
         timeControlIncrementSeconds = request.timeControlIncrementSeconds,
         rated = request.rated,
@@ -195,7 +202,8 @@ final class TournamentService(
                   opponentLichessUserId = pairing.blackLichessUserId,
                   accessToken = user.accessToken,
                   initialSeconds = tournament.timeControlInitialSeconds,
-                  incrementSeconds = tournament.timeControlIncrementSeconds
+                  incrementSeconds = tournament.timeControlIncrementSeconds,
+                  challengerColor = "white"
                 )
                 .flatMap {
                   case Left(errorMessage) => Future.successful(Left(External(s"Challenge issuance failed: $errorMessage")))
@@ -205,25 +213,6 @@ final class TournamentService(
           }
       }
     } yield result
-
-  /** API command: refresh unresolved pairing results for an active round using Lichess game exports. */
-  def refreshRoundResults(
-      tournamentId: ObjectId,
-      roundNumber: Int,
-      user: AuthenticatedUser
-  ): Future[Either[TournamentError, RefreshRoundResultsView]] =
-    if (roundNumber <= 0) {
-      Future.successful(Left(BadRequest("roundNumber must be positive")))
-    } else {
-      for {
-        tournamentOpt <- tournamentRepository.findByIdOption(tournamentId)
-        result <- tournamentOpt match {
-          case None => Future.successful(Left(NotFound(s"Tournament '${tournamentId.toHexString}' not found")))
-          case Some(_) =>
-            refreshRoundResultsForTournament(tournamentId, roundNumber, user)
-        }
-      } yield result
-    }
 
   /** API command: end an active round transactionally by applying double-forfeits and finalizing official results. */
   def endRound(tournamentId: ObjectId, roundNumber: Int): Future[Either[TournamentError, EndRoundView]] =
@@ -285,14 +274,41 @@ final class TournamentService(
         case None => Future.successful(Left(NotFound(s"Tournament '${tournamentId.toHexString}' not found")))
         case Some(_) =>
           for {
+            registrations <- registrationRepository.listByTournament(tournamentId)
             states <- playerTournamentStateRepository.listByTournament(tournamentId)
             pairings <- pairingRepository.listByTournament(tournamentId)
             latestRoundNumber <- roundRepository.latestRoundNumberForTournament(tournamentId)
           } yield {
             val officialPairings = pairings.filter(pairing => pairing.isOfficial && pairing.result.nonEmpty)
+            val stateByUser = states.map(state => state.lichessUserId -> state).toMap
+            val registeredUserIds = registrations
+              .collect {
+                case registration if registration.status == RegistrationStatus.Registered => registration.lichessUserId
+              }
+              .distinct
+            val registeredStates = registeredUserIds.map { userId =>
+              stateByUser.getOrElse(
+                userId,
+                PlayerTournamentStateDocument(
+                  _id = None,
+                  tournamentId = tournamentId,
+                  lichessUserId = userId,
+                  points = 0d,
+                  gamesPlayed = 0,
+                  opponents = Seq.empty,
+                  colors = Seq.empty,
+                  resultsByRound = Map.empty,
+                  tiebreaks = TiebreaksDocument(0d, 0d),
+                  updatedAt = new Date(0L)
+                )
+              )
+            }
             // Milestone 7 read model: standings are sorted by points then Swiss tiebreaks.
-            val tiebreaksByUser = computeTiebreaks(states, officialPairings)
-            val ranked = rankStandingsEntries(states, tiebreaksByUser)
+            val allTiebreaksByUser = computeTiebreaks(states, officialPairings)
+            val tiebreaksByUser = registeredUserIds.map { userId =>
+              userId -> allTiebreaksByUser.getOrElse(userId, TiebreaksDocument(0d, 0d))
+            }.toMap
+            val ranked = rankStandingsEntries(registeredStates, tiebreaksByUser)
             Right(
               StandingsView(
                 tournamentId = tournamentId.toHexString,
@@ -340,13 +356,17 @@ final class TournamentService(
     }
 
   /** API query: return tournament hub summary with current round progress counters. */
-  def getTournamentHub(tournamentId: ObjectId): Future[Either[TournamentError, TournamentHubView]] =
+  def getTournamentHub(tournamentId: ObjectId, refreshResults: Boolean): Future[Either[TournamentError, TournamentHubView]] =
     for {
       tournamentOpt <- tournamentRepository.findByIdOption(tournamentId)
       result <- tournamentOpt match {
         case None => Future.successful(Left(NotFound(s"Tournament '${tournamentId.toHexString}' not found")))
         case Some(tournament) =>
-          roundRepository.latestRoundForTournament(tournamentId).flatMap {
+          val syncOperation =
+            if (refreshResults) syncUnresolvedGameResults(tournamentId)
+            else Future.successful(0)
+          syncOperation.flatMap { _ =>
+            roundRepository.latestRoundForTournament(tournamentId).flatMap {
             case None =>
               Future.successful(
                 Right(
@@ -358,30 +378,31 @@ final class TournamentService(
                   )
                 )
               )
-            case Some(round) =>
-              for {
-                pairings <- pairingRepository.listByRound(round._id.get)
-                byes <- byeRepository.listByRound(round._id.get)
-              } yield {
-                val completed = pairings.count(pairing => pairing.isOfficial && pairing.result.nonEmpty)
-                val unresolved = pairings.size - completed
-                Right(
-                  TournamentHubView(
-                    tournament = toTournamentView(tournament),
-                    currentRoundNumber = round.roundNumber,
-                    currentRoundStatus = round.status,
-                    roundProgress = Some(
-                      RoundProgressView(
-                        roundNumber = round.roundNumber,
-                        roundStatus = round.status,
-                        completedPairings = completed,
-                        unresolvedPairings = unresolved,
-                        byeCount = byes.size
+              case Some(round) =>
+                for {
+                  pairings <- pairingRepository.listByRound(round._id.get)
+                  byes <- byeRepository.listByRound(round._id.get)
+                } yield {
+                  val completed = pairings.count(pairing => pairing.isOfficial && pairing.result.nonEmpty)
+                  val unresolved = pairings.size - completed
+                  Right(
+                    TournamentHubView(
+                      tournament = toTournamentView(tournament),
+                      currentRoundNumber = round.roundNumber,
+                      currentRoundStatus = round.status,
+                      roundProgress = Some(
+                        RoundProgressView(
+                          roundNumber = round.roundNumber,
+                          roundStatus = round.status,
+                          completedPairings = completed,
+                          unresolvedPairings = unresolved,
+                          byeCount = byes.size
+                        )
                       )
                     )
                   )
-                )
-              }
+                }
+            }
           }
       }
     } yield result
@@ -413,14 +434,41 @@ final class TournamentService(
         case None => Future.successful(Left(NotFound(s"Tournament '${tournamentId.toHexString}' not found")))
         case Some(_) =>
           for {
+            registrations <- registrationRepository.listByTournament(tournamentId)
             states <- playerTournamentStateRepository.listByTournament(tournamentId)
             pairings <- pairingRepository.listByTournament(tournamentId)
             byes <- byeRepository.listByTournament(tournamentId)
             latestRoundNumber <- roundRepository.latestRoundNumberForTournament(tournamentId)
           } yield {
             val officialPairings = pairings.filter(pairing => pairing.isOfficial && pairing.result.nonEmpty)
-            val tiebreaksByUser = computeTiebreaks(states, officialPairings)
-            val sortedUserIds = rankStandingsEntries(states, tiebreaksByUser).map(_.lichessUserId)
+            val stateByUser = states.map(state => state.lichessUserId -> state).toMap
+            val registeredUserIds = registrations
+              .collect {
+                case registration if registration.status == RegistrationStatus.Registered => registration.lichessUserId
+              }
+              .distinct
+            val registeredStates = registeredUserIds.map { userId =>
+              stateByUser.getOrElse(
+                userId,
+                PlayerTournamentStateDocument(
+                  _id = None,
+                  tournamentId = tournamentId,
+                  lichessUserId = userId,
+                  points = 0d,
+                  gamesPlayed = 0,
+                  opponents = Seq.empty,
+                  colors = Seq.empty,
+                  resultsByRound = Map.empty,
+                  tiebreaks = TiebreaksDocument(0d, 0d),
+                  updatedAt = new Date(0L)
+                )
+              )
+            }
+            val allTiebreaksByUser = computeTiebreaks(states, officialPairings)
+            val tiebreaksByUser = registeredUserIds.map { userId =>
+              userId -> allTiebreaksByUser.getOrElse(userId, TiebreaksDocument(0d, 0d))
+            }.toMap
+            val sortedUserIds = rankStandingsEntries(registeredStates, tiebreaksByUser).map(_.lichessUserId)
             // Build per-player game cells from official results only; unfinished games stay out of crosstable.
             val pairingsByUser = officialPairings.foldLeft(Map.empty[String, Vector[CrosstableCellView]]) {
               (acc, pairing) =>
@@ -453,7 +501,6 @@ final class TournamentService(
               )
               acc.updated(bye.lichessUserId, acc.getOrElse(bye.lichessUserId, Vector.empty) :+ view)
             }
-            val stateByUser = states.map(state => state.lichessUserId -> state).toMap
             val rows = sortedUserIds.map { userId =>
               val state = stateByUser.getOrElse(
                 userId,
@@ -850,56 +897,27 @@ final class TournamentService(
       status = status
     )
 
-  private def refreshRoundResultsForTournament(
-      tournamentId: ObjectId,
-      roundNumber: Int,
-      user: AuthenticatedUser
-  ): Future[Either[TournamentError, RefreshRoundResultsView]] =
-    roundRepository.findByTournamentAndRoundNumber(tournamentId, roundNumber).flatMap {
-      case None => Future.successful(Left(NotFound(s"Round $roundNumber not found")))
-      case Some(round) if round.status != "active" =>
-        Future.successful(Left(Conflict(s"Round $roundNumber must be active to refresh results")))
-      case Some(round) =>
-        pairingRepository.listByRound(round._id.get).flatMap { pairings =>
-          val candidatePairings = pairings.filter(pairing => pairing.gameId.nonEmpty && !pairing.isOfficial)
-          Future
-            .traverse(candidatePairings) { pairing =>
-              challengeGateway.lookupGameResult(pairing.gameId, user.accessToken).flatMap {
-                case Left(_) => Future.successful(false)
-                case Right(Some(result)) if pairing.result.contains(result) => Future.successful(false)
-                case Right(Some(result)) =>
-                  pairingRepository.updateResult(pairing._id.get, result, isOfficial = false)
-                case Right(None) => Future.successful(false)
+  private def syncUnresolvedGameResults(tournamentId: ObjectId): Future[Int] =
+    pairingRepository.listByTournament(tournamentId).flatMap { pairings =>
+      val pendingPairings = pairings.filter(pairing => pairing.gameId.nonEmpty && pairing.result.isEmpty)
+      val gameIds = pendingPairings.map(_.gameId).distinct
+      if (gameIds.isEmpty) Future.successful(0)
+      else {
+        challengeGateway.lookupGameResults(gameIds).flatMap {
+          case Left(_) =>
+            Future.successful(0)
+          case Right(resultByGameId) =>
+            Future
+              .traverse(pendingPairings) { pairing =>
+                resultByGameId.get(pairing.gameId) match {
+                  case None => Future.successful(false)
+                  case Some(result) =>
+                    pairingRepository.updateResult(pairing._id.get, result, isOfficial = false)
+                }
               }
-            }
-            .flatMap { updates =>
-              val refreshedCount = updates.count(identity)
-              val now = new Date()
-              val payload = new Document()
-                .append("roundNumber", roundNumber)
-                .append("refreshedPairings", refreshedCount)
-
-              auditEventRepository
-                .insert(
-                  AuditEventDocument(
-                    _id = Some(new ObjectId()),
-                    tournamentId = tournamentId,
-                    `type` = "round_results_refreshed",
-                    payload = payload,
-                    createdAt = now
-                  )
-                )
-                .map(_ =>
-                  Right(
-                    RefreshRoundResultsView(
-                      tournamentId = tournamentId.toHexString,
-                      roundNumber = roundNumber,
-                      refreshedPairings = refreshedCount
-                    )
-                  )
-                )
-            }
+              .map(_.count(identity))
         }
+      }
     }
 
   private def endRoundInTransaction(
@@ -1315,6 +1333,7 @@ final class TournamentService(
       id = document._id.map(_.toHexString).getOrElse(""),
       name = document.name,
       teamId = document.teamId,
+      tournamentDirectorLichessUserId = document.tournamentDirectorLichessUserId,
       timeControlInitialSeconds = document.timeControlInitialSeconds,
       timeControlIncrementSeconds = document.timeControlIncrementSeconds,
       rated = document.rated,

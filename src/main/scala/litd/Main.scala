@@ -19,7 +19,7 @@ import litd.auth.{
 import litd.mongo.MongoDatabaseFactory
 import litd.mongo.migration.MigrationRunner
 import litd.mongo.repository.Repositories
-import litd.tournament.{ChallengeSyncWorker, LichessChallengeGateway, TournamentRoutes, TournamentService}
+import litd.tournament.{LichessChallengeGateway, TournamentRoutes, TournamentService}
 import litd.ui.UiRoutes
 import org.mongodb.scala.MongoClient
 
@@ -33,8 +33,7 @@ final case class MongoConfig(uri: String, database: String)
 final case class AppConfig(
     http: HttpConfig,
     mongodb: MongoConfig,
-    auth: AuthConfig,
-    challengeWorker: litd.tournament.ChallengeWorkerConfig
+    auth: AuthConfig
 )
 
 object AppConfigLoader {
@@ -42,7 +41,6 @@ object AppConfigLoader {
     val httpConfig = config.getConfig("litd.http")
     val mongoConfig = config.getConfig("litd.mongodb")
     val authConfig = config.getConfig("litd.auth")
-    val challengeWorkerConfig = config.getConfig("litd.challengeWorker")
     val lichessConfig = authConfig.getConfig("lichess")
     val sessionConfig = authConfig.getConfig("session")
     AppConfig(
@@ -72,11 +70,6 @@ object AppConfigLoader {
           secureCookie = sessionConfig.getBoolean("secureCookie"),
           maxAgeSeconds = sessionConfig.getInt("maxAgeSeconds")
         )
-      ),
-      challengeWorker = litd.tournament.ChallengeWorkerConfig(
-        enabled = challengeWorkerConfig.getBoolean("enabled"),
-        pollIntervalSeconds = challengeWorkerConfig.getInt("pollIntervalSeconds"),
-        batchSize = challengeWorkerConfig.getInt("batchSize")
       )
     )
   }
@@ -125,15 +118,6 @@ object MainObject {
       mongoClient = mongoClient,
       challengeGateway = challengeGateway
     )
-    val challengeWorker = new ChallengeSyncWorker(
-      config = appConfig.challengeWorker,
-      pairingRepository = repositories.pairings,
-      oauthTokenRepository = repositories.oauthTokens,
-      auditEventRepository = repositories.auditEvents,
-      cryptoService = cryptoService,
-      challengeGateway = challengeGateway
-    )
-    val challengeWorkerCancellable = challengeWorker.start()
     val tournamentRoutes = new TournamentRoutes(appConfig.auth, authService, tournamentService)
     val uiRoutes = new UiRoutes()
 
@@ -160,7 +144,6 @@ object MainObject {
       case NonFatal(ex) =>
         system.log.error("Read from stdin failed", ex)
     } finally {
-      challengeWorkerCancellable.foreach(_.cancel())
       Await.result(binding.unbind(), 15.seconds)
       mongoClient.close()
       system.terminate()
